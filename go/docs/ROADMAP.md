@@ -200,8 +200,8 @@ choice already covers it.
 
 ### Phase 1 — Multi-provider support
 SDK choice per provider: see "Library & framework choices" → "LLM provider SDKs" above.
-- [ ] Move `adapters/driven/llm/xai` → `adapters/driven/llm/providers/xai` (namespace only, no behavior change; update `cmd/grok/main.go` import).
-- [ ] `providers/openai`: wraps `github.com/openai/openai-go`'s streaming chat completions + tool calling.
+- [x] Move `adapters/driven/llm/xai` → `adapters/driven/llm/providers/xai` (namespace only, no behavior change; update `cmd/grok/main.go` import).
+- [x] `providers/openai`: wraps `github.com/openai/openai-go`'s streaming chat completions + tool calling.
 - [ ] `providers/anthropic`: wraps `github.com/anthropics/anthropic-sdk-go`'s Messages API streaming — different event shape than OpenAI-style (`content_block_delta`, `message_delta`, `tool_use` blocks), real translation logic, not a copy-paste of the xAI parser.
 - [ ] `providers/gemini`: wraps `github.com/googleapis/go-genai`'s streaming `GenerateContent`.
 - [ ] `providers/ollama`: wraps `github.com/ollama/ollama/api` for local models.
