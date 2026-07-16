@@ -1,8 +1,8 @@
 # grok-build (Go port)
 
-This directory is the start of a Go rewrite of `grok-build`'s TUI coding
-agent, living side-by-side with the existing `crates/` Rust tree while the
-port grows. It uses:
+This directory is a **pure-Go, goroutine-native, multi-provider** rewrite of
+`grok-build`'s TUI coding agent, living side-by-side with the existing
+`crates/` Rust tree while the port grows. It uses:
 
 - **[Charm Bubble Tea](https://github.com/charmbracelet/bubbletea)** for the
   terminal UI (the Go analogue of the Rust `xai-grok-pager` crate).
@@ -12,6 +12,18 @@ port grows. It uses:
 - **[nava](https://github.com/nirantaraai/nava)** (a Mage-based build
   toolkit) as the *only* build/test/lint path. There are no `.sh` files
   anywhere in this tree — every command below is a typed Go function.
+
+This is **not** an xAI-only client. `ports.LLMProvider` is provider-agnostic
+by design; xAI's Grok is the first backend behind it, with OpenAI,
+Anthropic, Gemini, and OpenAI-compatible/local backends planned next. See
+[`docs/ROADMAP.md`](docs/ROADMAP.md) for the full phased plan (multi-provider
+support, goroutine/concurrency hardening, tool parity, MCP/ACP, sandboxing,
+and more) with a task checklist per phase.
+
+**`crates/` (the Rust source) is kept exactly as-is and is never modified by
+this port** — it's the reference implementation to check behavior against
+when a Go port task is ambiguous. See "Repository layout & reference
+policy" in the roadmap.
 
 ## Requirements
 
@@ -71,4 +83,7 @@ go/
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how this maps onto
 the ~65-crate Rust closure under `../crates/codegen/` and what's ported so
-far vs. what's still Rust-only.
+far vs. what's still Rust-only, and [`docs/ROADMAP.md`](docs/ROADMAP.md) for
+the phased plan (multi-provider support, concurrency/performance hardening,
+tool parity, MCP/ACP, sandboxing, telemetry, distribution) that gets it
+there.

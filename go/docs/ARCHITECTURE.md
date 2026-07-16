@@ -1,5 +1,11 @@
 # Architecture: hexagonal layout + Rust → Go migration map
 
+> This document explains the current shape of the code and how it maps to
+> the Rust tree. For the phased plan to get from here to a pure-Go,
+> goroutine-native, multi-provider agent — including the concurrency
+> architecture and the full provider/tool/MCP/ACP task list — see
+> [`ROADMAP.md`](ROADMAP.md).
+
 ## Why hexagonal
 
 The Rust tree is ~65 crates deep (`crates/codegen/xai-grok-*`) covering the
@@ -17,13 +23,18 @@ without touching the layers that already work.
    driving adapters  │   internal/adapters/     │  driven adapters
    (call in)         │       driving/           │  (called out to)
                       ─────────────────────────
-        tui  ───────▶ │                          │ ◀─────── xai (LLM)
-   (future: cli,      │   internal/application/  │          config/file
-    headless, ACP)    │      chatservice         │          credentials/env
-                      │        (use cases)        │          tools/shellexec
-                      └──────────┬────────────────┘          tools/readfile
-                                 │                    (future: gRPC tool
-                      ┌──────────▼────────────────┐    runtime, OAuth, MCP)
+        tui  ───────▶ │                          │ ◀─────── xai (LLM — 1st of
+   (future: cli,      │   internal/application/  │          several providers,
+    headless, ACP)    │      chatservice         │          see ROADMAP.md)
+                      │        (use cases)        │          config/file
+                      └──────────┬────────────────┘          credentials/env
+                                 │                             tools/shellexec
+                      ┌──────────▼────────────────┐            tools/readfile
+                      │   internal/domain/         │  (future: openai/
+                      │  chat, ports, settings      │   anthropic/gemini
+                      │  (no external dependencies) │   providers + router,
+                      └─────────────────────────────┘   gRPC tool runtime,
+                                                          OAuth, MCP)
                       │   internal/domain/         │
                       │  chat, ports, settings      │
                       │  (no external dependencies) │
@@ -52,7 +63,7 @@ tool-call loop → TUI) but covers a small fraction of the Rust surface.
 | Go package | Rust crate(s) it stands in for | Status |
 |---|---|---|
 | `domain/chat`, `application/chatservice` | `xai-grok-agent`, `xai-chat-state`, `xai-prompt-queue` | Minimal vertical slice (single-session, no persistence, no subagents) |
-| `adapters/driven/llm/xai` | `xai-grok-http`, model-facing parts of `xai-grok-shell` | OpenAI-compatible streaming chat only; no leader/relay/remote modes |
+| `adapters/driven/llm/xai` | `xai-grok-http`, model-facing parts of `xai-grok-shell` | First of several planned `ports.LLMProvider` implementations (OpenAI/Anthropic/Gemini/OpenAI-compatible next — see `ROADMAP.md` Phase 1); no leader/relay/remote modes |
 | `adapters/driven/config/file` | `xai-grok-config`, `xai-grok-config-types` | One flat YAML file; no managed-config layering, no TOML editing |
 | `adapters/driven/credentials/env` | `xai-grok-auth`, `xai-grok-secrets` | Env-var API key only — **no OAuth device-code flow yet** |
 | `adapters/driven/tools/shellexec`, `tools/readfile` | `xai-grok-tools`, `xai-grok-tools-api` (see its `grok-tools.proto`) | 2 of many tools; in-process `ports.Tool`, not the real gRPC `GrokToolsService` |
