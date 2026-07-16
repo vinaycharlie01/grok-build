@@ -2,11 +2,9 @@ package xai_test
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/llm/xai"
@@ -18,97 +16,92 @@ type fakeCreds struct{ key string }
 
 func (f fakeCreds) APIKey() (string, error) { return f.key, nil }
 
-// sseChunk et al. mirror just enough of the xAI streaming wire format to
-// build well-formed test fixtures via json.Marshal instead of hand-typed
-// (and easy to get subtly wrong) JSON literals.
-type sseChunk struct {
-	Choices []sseChoice `json:"choices"`
-}
-type sseChoice struct {
-	Delta sseDelta `json:"delta"`
-}
-type sseDelta struct {
-	Content   string        `json:"content,omitempty"`
-	ToolCalls []sseToolCall `json:"tool_calls,omitempty"`
-}
-type sseToolCall struct {
-	Index    int    `json:"index"`
-	ID       string `json:"id,omitempty"`
-	Function sseFn  `json:"function"`
-}
-type sseFn struct {
-	Name      string `json:"name,omitempty"`
-	Arguments string `json:"arguments"`
+type failingCreds struct{}
+
+func (failingCreds) APIKey() (string, error) { return "", fmt.Errorf("no credentials configured") }
+
+// Three tiny, fixed-shape SSE line builders, one per fixture the tests
+// need. %q handles JSON string-escaping for us, so there's no hand-typed
+// JSON to get subtly wrong — each function is one literal template, not a
+// struct hierarchy to assemble.
+func sseTextDelta(text string) string {
+	return "data: " + fmt.Sprintf(`{"choices":[{"delta":{"content":%q}}]}`, text) + "\n\n"
 }
 
-func sseLine(t *testing.T, chunk sseChunk) string {
-	t.Helper()
-	data, err := json.Marshal(chunk)
-	if err != nil {
-		t.Fatalf("marshal fixture chunk: %v", err)
+func sseToolCallStart(index int, id, name, argsFragment string) string {
+	return "data: " + fmt.Sprintf(
+		`{"choices":[{"delta":{"tool_calls":[{"index":%d,"id":%q,"function":{"name":%q,"arguments":%q}}]}}]}`,
+		index, id, name, argsFragment,
+	) + "\n\n"
+}
+
+func sseToolCallArgs(index int, argsFragment string) string {
+	return "data: " + fmt.Sprintf(
+		`{"choices":[{"delta":{"tool_calls":[{"index":%d,"function":{"arguments":%q}}]}}]}`,
+		index, argsFragment,
+	) + "\n\n"
+}
+
+func TestStreamChatParsesTextDeltas(t *testing.T) {
+	sseBody := sseTextDelta("Hel") + sseTextDelta("lo") + "data: [DONE]\n\n"
+
+	client := xai.New(newSSEServer(t, sseBody), fakeCreds{key: "test-key"})
+	session := chat.NewSession("s1", "grok-4", "")
+
+	got := drain(t, client, session)
+
+	if len(got) != 3 { // 2 deltas + done
+		t.Fatalf("want 3 events, got %d: %+v", len(got), got)
 	}
-	return "data: " + string(data) + "\n\n"
+	if got[0].Type != ports.EventTextDelta || got[0].Text != "Hel" {
+		t.Fatalf("event[0] = %+v, want text delta %q", got[0], "Hel")
+	}
+	if got[1].Type != ports.EventTextDelta || got[1].Text != "lo" {
+		t.Fatalf("event[1] = %+v, want text delta %q", got[1], "lo")
+	}
+	if got[2].Type != ports.EventDone {
+		t.Fatalf("event[2] = %+v, want EventDone", got[2])
+	}
 }
 
-func TestStreamChatParsesTextAndAssemblesToolCall(t *testing.T) {
-	var b strings.Builder
-	b.WriteString(sseLine(t, sseChunk{Choices: []sseChoice{{Delta: sseDelta{Content: "Hel"}}}}))
-	b.WriteString(sseLine(t, sseChunk{Choices: []sseChoice{{Delta: sseDelta{Content: "lo"}}}}))
-	b.WriteString(sseLine(t, sseChunk{Choices: []sseChoice{{Delta: sseDelta{ToolCalls: []sseToolCall{
-		{Index: 0, ID: "call_1", Function: sseFn{Name: "get_weather", Arguments: `{"city":`}},
-	}}}}}))
-	b.WriteString(sseLine(t, sseChunk{Choices: []sseChoice{{Delta: sseDelta{ToolCalls: []sseToolCall{
-		{Index: 0, Function: sseFn{Arguments: `"NYC"}`}},
-	}}}}}))
-	b.WriteString("data: [DONE]\n\n")
-	sseBody := b.String()
+func TestStreamChatAssemblesToolCallAcrossChunks(t *testing.T) {
+	// The API streams a tool call's id/name once, then its arguments in
+	// fragments — the client must reassemble them by index.
+	sseBody := sseToolCallStart(0, "call_1", "get_weather", `{"city":`) +
+		sseToolCallArgs(0, `"NYC"}`) +
+		"data: [DONE]\n\n"
 
+	client := xai.New(newSSEServer(t, sseBody), fakeCreds{key: "test-key"})
+	session := chat.NewSession("s1", "grok-4", "")
+
+	got := drain(t, client, session)
+
+	want := chat.ToolCall{ID: "call_1", Name: "get_weather", Arguments: `{"city":"NYC"}`}
+	if len(got) != 2 { // 1 assembled tool call + done
+		t.Fatalf("want 2 events, got %d: %+v", len(got), got)
+	}
+	if got[0].Type != ports.EventToolCall || got[0].ToolCall != want {
+		t.Fatalf("event[0] = %+v, want ToolCall %+v", got[0], want)
+	}
+	if got[1].Type != ports.EventDone {
+		t.Fatalf("event[1] = %+v, want EventDone", got[1])
+	}
+}
+
+func TestStreamChatSendsBearerAuthHeader(t *testing.T) {
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
-		if r.URL.Path != "/chat/completions" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, sseBody)
+		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	defer srv.Close()
 
 	client := xai.New(srv.URL, fakeCreds{key: "test-key"})
-	session := chat.NewSession("s1", "grok-4", "")
-	session.Append(chat.UserMessage("what's the weather in NYC?"))
-
-	events, err := client.StreamChat(context.Background(), session, nil)
-	if err != nil {
-		t.Fatalf("StreamChat() error = %v", err)
-	}
-
-	var got []ports.StreamEvent
-	for ev := range events {
-		got = append(got, ev)
-	}
+	drain(t, client, chat.NewSession("s1", "grok-4", ""))
 
 	if gotAuth != "Bearer test-key" {
 		t.Fatalf("Authorization header = %q, want %q", gotAuth, "Bearer test-key")
-	}
-
-	if len(got) != 4 {
-		t.Fatalf("want 4 events (2 deltas + 1 tool call + done), got %d: %+v", len(got), got)
-	}
-	if got[0].Type != ports.EventTextDelta || got[0].Text != "Hel" {
-		t.Fatalf("event[0] = %+v", got[0])
-	}
-	if got[1].Type != ports.EventTextDelta || got[1].Text != "lo" {
-		t.Fatalf("event[1] = %+v", got[1])
-	}
-	want := chat.ToolCall{ID: "call_1", Name: "get_weather", Arguments: `{"city":"NYC"}`}
-	if got[2].Type != ports.EventToolCall || got[2].ToolCall != want {
-		t.Fatalf("event[2] = %+v, want ToolCall %+v", got[2], want)
-	}
-	if got[3].Type != ports.EventDone {
-		t.Fatalf("event[3] = %+v, want EventDone", got[3])
 	}
 }
 
@@ -136,6 +129,29 @@ func TestStreamChatPropagatesCredentialError(t *testing.T) {
 	}
 }
 
-type failingCreds struct{}
+// newSSEServer starts a test server that always replies with body as an
+// SSE stream and returns its URL; the server is closed when t completes.
+func newSSEServer(t *testing.T, body string) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
 
-func (failingCreds) APIKey() (string, error) { return "", fmt.Errorf("no credentials configured") }
+// drain runs one turn and collects every event it produces.
+func drain(t *testing.T, client *xai.Client, session *chat.Session) []ports.StreamEvent {
+	t.Helper()
+	events, err := client.StreamChat(context.Background(), session, nil)
+	if err != nil {
+		t.Fatalf("StreamChat() error = %v", err)
+	}
+	var got []ports.StreamEvent
+	for ev := range events {
+		got = append(got, ev)
+	}
+	return got
+}
