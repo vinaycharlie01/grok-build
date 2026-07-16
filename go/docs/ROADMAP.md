@@ -45,9 +45,19 @@ them, it doesn't replace them.
 3. **Ports before adapters.** New capability always starts as an interface
    in `internal/domain/ports`, gets a fake for application-layer tests, and
    only then gets a real adapter.
-4. **Every task ships with tests.** Table-driven unit tests for
+4. **Test-driven, not test-added.** Every unit test in this repo is written
+   red→green: write the test against the interface/behavior you're about to
+   add, run it and watch it fail for the right reason (compile error is not
+   a valid "red" — the test must build and fail on an assertion), then write
+   the minimum implementation to turn it green, then refactor with the test
+   as your guard rail. This applies to every layer — a fake `ports.Tool`/
+   `ports.LLMProvider` and a table-driven test come *before* the adapter
+   that will satisfy it, not after. A PR whose tests were written by
+   observing already-working code is not TDD and doesn't meet this bar,
+   even if coverage looks identical. Table-driven tests for
    domain/application, `httptest`/fakes for adapters, benchmarks for hot
-   concurrency paths (Phase 2).
+   concurrency paths (Phase 2) — same tools as before, TDD is about the
+   *order*, not a new test style.
 5. **Pure Go where practical.** Prefer pure-Go dependencies over cgo
    (e.g. `modernc.org/sqlite` over `mattn/go-sqlite3` in Phase 4) so
    `go.yaml`'s `noCGO: true` cross-compiles stay possible. Note exceptions
@@ -187,8 +197,13 @@ Rust reference: `xai-grok-telemetry`, `xai-mixpanel`.
 A task is done only when it:
 
 1. Builds via `mage go:build` and passes `mage go:test` / `mage go:race`.
-2. Ships with tests at the appropriate layer (fake-based for
-   application-layer logic, `httptest`/`t.TempDir()` for adapters).
+2. Was developed TDD: the test(s) at the appropriate layer (fake-based for
+   application-layer logic, `httptest`/`t.TempDir()` for adapters) were
+   written first, confirmed to fail for the right reason, then made to pass
+   — not written afterward to describe code that already works. Commit
+   history / PR description should make the red→green step visible (e.g.
+   a commit that adds only the failing test, or the PR notes the failure
+   output before the fix).
 3. Has no goroutine that can outlive its context — verified, not assumed.
 4. Updates `ARCHITECTURE.md`'s provider/tool table if it adds a new
    provider or tool.

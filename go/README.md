@@ -55,6 +55,12 @@ them); `mage` is what CI and contributors should use so the command surface
 stays identical for every tool this repo will eventually wrap (`ko`, `helm`,
 ...).
 
+**Every unit test in this repo is TDD, not test-added-after**: write the
+test against the behavior you're about to add, watch it fail for the right
+reason, then write the minimum code to turn it green. See "Definition of
+done" in [`docs/ROADMAP.md`](docs/ROADMAP.md) — this is a hard requirement
+for every task in the roadmap, not a suggestion.
+
 ## Running it
 
 ```bash
