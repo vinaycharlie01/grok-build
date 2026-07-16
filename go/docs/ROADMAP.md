@@ -65,6 +65,109 @@ them, it doesn't replace them.
 6. **Build only through nava/Mage.** No shell scripts, ever — new targets
    go in `magefile.go` + `go.yaml`, same as Phase 0.
 
+## Library & framework choices
+
+Concrete third-party library decisions per phase — and one explicit
+**non-adoption** that's important enough to call out before the phase list.
+
+### Core agent loop: staying hand-rolled, not adopting a third-party framework
+
+Google [ADK Go](https://github.com/google/adk-go), ByteDance's
+[Eino](https://github.com/cloudwego/eino), and
+[`nlpodyssey/openai-agents-go`](https://github.com/nlpodyssey/openai-agents-go)
+are all real, capable Go agent frameworks with genuinely useful ideas
+(multi-agent handoffs, graph workflows, guardrails, built-in memory/session
+machinery). This roadmap does **not** adopt any of them as the backbone of
+`internal/application/chatservice` — not a judgment on their quality, but a
+fit problem specific to this project:
+
+1. **Provider-agnostic is the whole point.** Each of these frameworks has
+   its own opinion about how a "tool," a "session," or a "provider" is
+   shaped. Adopting one as the core would mean `chatservice`'s loop is
+   governed by that framework's abstractions instead of our own
+   `ports.LLMProvider`/`ports.Tool` — undermining the reason Phase 0 built a
+   hexagon in the first place (swapping a framework should be an adapter
+   change, not a rewrite of the thing every other phase depends on).
+2. **It's already built, tested, and TDD'd.** Replacing it is a full
+   rewrite of the core loop for a framework whose fit with 4+ non-native
+   providers — xAI in particular, which none of these frameworks ship
+   first-party support for — is unverified.
+3. **Nothing is lost.** Their ideas stay valid *inspiration* for phases that
+   need exactly what they're good at: ADK's multi-agent/handoff model and
+   OpenAI Agents Go's guardrails are natural reference points for Phase 6
+   (ACP) and Phase 8 (hooks/plugins) — read their source for the pattern,
+   implement it behind our own ports, same as every other phase here.
+
+Revisit this if a concrete phase hits a wall the hexagon doesn't solve well
+— but the default is: our loop, their ideas where useful.
+
+### LLM provider SDKs (Phase 1)
+
+Official vendor SDKs replace hand-rolled HTTP/SSE parsing wherever one
+exists and is well-maintained — less wire-format code for us to own and
+test, better handling of edge cases (retries, rate-limit headers, streaming
+ergonomics) than a bespoke client. Each still implements our own
+`ports.LLMProvider` — the SDK is an implementation detail of one adapter,
+never visible above `internal/adapters/driven/llm/providers/*`.
+
+| Provider | Adapter package | SDK |
+|---|---|---|
+| xAI | `providers/xai` | Hand-rolled (Phase 0, already built) — xAI has no official Go SDK; the OpenAI-compatible SSE parsing already written stays as-is. |
+| OpenAI | `providers/openai` | [`github.com/openai/openai-go`](https://github.com/openai/openai-go) |
+| Anthropic | `providers/anthropic` | [`github.com/anthropics/anthropic-sdk-go`](https://github.com/anthropics/anthropic-sdk-go) |
+| Google Gemini | `providers/gemini` | [`github.com/googleapis/go-genai`](https://github.com/googleapis/go-genai) |
+| Ollama (local) | `providers/ollama` | [`github.com/ollama/ollama/api`](https://github.com/ollama/ollama/tree/main/api) — native client, not the generic OpenAI-compat path |
+| Other OpenAI-compatible (OpenRouter, Groq, vLLM, ...) | `providers/openaicompat` | `github.com/openai/openai-go` pointed at a configurable `BaseURL` |
+
+### CLI (Phase 1)
+
+- [ ] Wire [Cobra](https://github.com/spf13/cobra) into `cmd/grok/main.go`: a
+      `run` subcommand (today's default TUI launch), a `version` subcommand,
+      room for a future `headless`/`mcp-server` subcommand (Phase 5). Purely
+      a driving-adapter/composition-root concern — no domain or application
+      changes.
+- [ ] Evaluate [Viper](https://github.com/spf13/viper) for config loading
+      (env var + flag + file precedence) as an enhancement to
+      `adapters/driven/config/file`; only adopt if it doesn't compromise the
+      `ports.ConfigStore` abstraction — the port stays ours either way.
+
+### TUI (Phase 9)
+
+Bubble Tea + Lip Gloss + Bubbles are already in use since Phase 0. Adding:
+- [ ] [Glamour](https://github.com/charmbracelet/glamour) for markdown/
+      code-block rendering in the transcript (the `xai-grok-markdown`
+      parity item already in Phase 9's task list).
+
+### MCP (Phase 5)
+
+- [ ] Use [`mark3labs/mcp-go`](https://github.com/mark3labs/mcp-go) for the
+      `ports.MCPClient` adapter instead of hand-rolling the MCP transport/
+      protocol layer — same reasoning as the LLM SDKs above.
+
+### Memory & vector search (Phase 4)
+
+The simple file-backed adapter stays the MVP (see Phase 4's task list). For
+the production-grade adapter behind the same port:
+- [ ] [Qdrant Go client](https://github.com/qdrant/go-client) or
+      [Weaviate Go client](https://github.com/weaviate/weaviate-go-client), or
+- [ ] PostgreSQL + `pgvector` (fits well if Phase 4's session store already
+      lands on Postgres instead of SQLite for a given deployment)
+
+Pick one when Phase 4 starts, driven by whatever the session-store decision
+ends up being — don't stand up a second database system if the first
+choice already covers it.
+
+### Observability (Phase 10)
+
+- [ ] [OpenTelemetry](https://opentelemetry.io/) for traces/metrics.
+      [Prometheus](https://prometheus.io/) + [Grafana](https://grafana.com/)
+      + [Loki](https://grafana.com/oss/loki/) is the common self-hosted
+      export target; [Langfuse](https://langfuse.com/) if LLM-call-level
+      tracing/eval is specifically wanted. All of it stays behind the
+      opt-in telemetry port already in Phase 10's task list — same
+      opt-in-by-default-off stance as everywhere else data leaves the
+      process.
+
 ## Concurrency & performance architecture (cross-cutting, informs every phase)
 
 | Concern | Design |
@@ -96,16 +199,18 @@ them, it doesn't replace them.
 - [x] Unit tests across every layer, `-race` clean.
 
 ### Phase 1 — Multi-provider support
+SDK choice per provider: see "Library & framework choices" → "LLM provider SDKs" above.
 - [ ] Move `adapters/driven/llm/xai` → `adapters/driven/llm/providers/xai` (namespace only, no behavior change; update `cmd/grok/main.go` import).
-- [ ] `providers/openai`: OpenAI Chat Completions streaming (very close to the xAI wire format already implemented — expect high code reuse).
-- [ ] `providers/anthropic`: Claude Messages API streaming — different SSE event shape (`content_block_delta`, `message_delta`, tool_use blocks) requiring real translation logic, not a copy-paste of the OpenAI-style parser.
-- [ ] `providers/gemini`: Google Generative Language API streaming (`generateContent` with `alt=sse` or the streaming endpoint) — also a distinct wire format.
-- [ ] `providers/openaicompat`: generic OpenAI-compatible adapter (configurable base URL + model) covering OpenRouter, Groq, local vLLM/Ollama/llama.cpp servers — reuses the OpenAI wire format with a config-supplied base URL.
+- [ ] `providers/openai`: wraps `github.com/openai/openai-go`'s streaming chat completions + tool calling.
+- [ ] `providers/anthropic`: wraps `github.com/anthropics/anthropic-sdk-go`'s Messages API streaming — different event shape than OpenAI-style (`content_block_delta`, `message_delta`, `tool_use` blocks), real translation logic, not a copy-paste of the xAI parser.
+- [ ] `providers/gemini`: wraps `github.com/googleapis/go-genai`'s streaming `GenerateContent`.
+- [ ] `providers/ollama`: wraps `github.com/ollama/ollama/api` for local models.
+- [ ] `providers/openaicompat`: `github.com/openai/openai-go` pointed at a configurable `BaseURL`, covering OpenRouter/Groq/vLLM/llama.cpp-style servers.
 - [ ] `llm/router`: composite `ports.LLMProvider` with `priority` and `round-robin` strategies to start.
 - [ ] Extend `settings.Config` (`Providers`, `Router`) and the `file` config adapter's YAML shape; keep `settings.Default()` backward compatible with Phase 0's single-provider config.
 - [ ] Extend `CredentialStore` to be provider-keyed; update the `env` adapter.
-- [ ] Update `cmd/grok/main.go` to build the provider set + router from config instead of a single hardcoded `xai.New(...)`.
-- [ ] Tests: `httptest` fakes per provider's wire format (mirror `llm/xai/client_test.go`'s `json.Marshal`-based fixture pattern — hand-typed SSE JSON is a proven bug source, don't repeat it); router tests covering success, fallback-on-error, and all-providers-failed.
+- [ ] Update `cmd/grok/main.go` to build the provider set + router from config instead of a single hardcoded `xai.New(...)`; this is also where the Cobra CLI task (see "Library & framework choices" → "CLI") lands.
+- [ ] Tests: `httptest`/SDK-provided test transports per provider's wire format (mirror `llm/xai/client_test.go`'s small `fmt.Sprintf(%q, ...)` fixture-builder pattern — hand-typed SSE JSON is a proven bug source, don't repeat it); router tests covering success, fallback-on-error, and all-providers-failed. TDD per the Definition of Done below: test first, watch it fail, then implement.
 - [ ] Docs: update `ARCHITECTURE.md`'s provider table; this ROADMAP's Phase 1 checklist gets checked off item by item as PRs land.
 
 ### Phase 2 — Concurrency & performance hardening
@@ -131,12 +236,12 @@ Rust reference: `xai-grok-tools`, `xai-grok-tools-api` (`grok-tools.proto`).
 Rust reference: `xai-chat-state`, `xai-prompt-queue`, `xai-grok-memory`, `xai-fast-worktree`, `xai-hunk-tracker`.
 - [ ] `ports.SessionStore` + a JSON-file adapter (start simple); SQLite adapter later using a **pure-Go** driver (`modernc.org/sqlite`), consistent with the pure-Go principle.
 - [ ] Prompt queue for multi-turn interleaving (Rust reference: `xai-prompt-queue`).
-- [ ] Long-term memory port + simple file-backed adapter; FTS5 or vector search is an explicit stretch goal, not required for Phase 4 to ship.
+- [ ] Long-term memory port + simple file-backed adapter (MVP); vector search adapter (Qdrant/Weaviate/pgvector — see "Library & framework choices" → "Memory & vector search") is an explicit stretch goal, not required for Phase 4 to ship.
 - [ ] Checkpoint/worktree snapshotting before risky tool calls, git-worktree-based (Rust reference: `xai-fast-worktree`).
 
 ### Phase 5 — MCP (Model Context Protocol)
 Rust reference: `xai-grok-mcp`.
-- [ ] `ports.MCPClient`: connect to external MCP servers (stdio/SSE/HTTP transports); expose their tools dynamically as `ports.Tool` implementations through the Phase 3 registry.
+- [ ] `ports.MCPClient`: connect to external MCP servers (stdio/SSE/HTTP transports) via `mark3labs/mcp-go` (see "Library & framework choices" → "MCP"); expose their tools dynamically as `ports.Tool` implementations through the Phase 3 registry.
 - [ ] Stretch: embedded MCP *server* mode exposing grok's own tools.
 
 ### Phase 6 — ACP (Agent Client Protocol)
@@ -159,13 +264,13 @@ Rust reference: `xai-grok-pager*`, `xai-ratatui-*`.
 - [ ] Modal dialogs (risky-tool-call confirmation, model/provider picker — ties directly into Phase 1's router).
 - [ ] Scrollback search.
 - [ ] Theming (color profiles).
-- [ ] Markdown/code-block rendering with syntax highlighting (first cut of `xai-grok-markdown` parity).
+- [ ] Markdown/code-block rendering with syntax highlighting via [Glamour](https://github.com/charmbracelet/glamour) (first cut of `xai-grok-markdown` parity — see "Library & framework choices" → "TUI").
 - [ ] Diff rendering for file edits (pairs with Phase 3's `editfile`).
 
 ### Phase 10 — Observability & telemetry
 Rust reference: `xai-grok-telemetry`, `xai-mixpanel`.
 - [ ] `log/slog` structured logging end-to-end through the agent (not just nava's build-time runners).
-- [ ] Opt-in telemetry port + local-file sink adapter by default; a remote sink adapter stays behind explicit operator opt-in — data-collection features default OFF, matching the opt-in-only stance this kind of feature needs.
+- [ ] Opt-in telemetry port + local-file sink adapter by default; OpenTelemetry-backed remote sink adapter(s) (Prometheus/Grafana/Loki, or Langfuse for LLM-call-level tracing — see "Library & framework choices" → "Observability") stay behind explicit operator opt-in — data-collection features default OFF, matching the opt-in-only stance this kind of feature needs.
 
 ### Phase 11 — Distribution & release
 - [ ] `mage go:crossBuild` wired to nava's `CrossBuild` target (darwin/linux/windows × amd64/arm64), config in `go.yaml`'s `crossBuild` section.

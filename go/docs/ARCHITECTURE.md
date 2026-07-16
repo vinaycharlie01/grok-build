@@ -18,6 +18,15 @@ adapter (a real gRPC tool runtime instead of `shellexec`, an OAuth
 `CredentialStore` instead of `env`, an ACP-driving adapter alongside `tui`)
 without touching the layers that already work.
 
+This is also why `internal/application/chatservice` is a hand-rolled loop
+rather than built on a third-party Go agent framework (Google ADK Go, Eino,
+OpenAI Agents Go): every one of those frameworks has its own opinion about
+what a "tool" or "provider" is, and adopting one as the core would put that
+framework's abstractions where `ports.LLMProvider`/`ports.Tool` are today —
+the opposite of what this hexagon buys us. See `ROADMAP.md`'s "Library &
+framework choices" section for the full reasoning and where those
+frameworks' ideas *do* get used (as design references for later phases).
+
 ```
                      ┌─────────────────────────┐
    driving adapters  │   internal/adapters/     │  driven adapters
