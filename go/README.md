@@ -55,6 +55,33 @@ them); `mage` is what CI and contributors should use so the command surface
 stays identical for every tool this repo will eventually wrap (`ko`, `helm`,
 ...).
 
+### Running a subset of tests
+
+`mage go:test` always runs `./...`; `go.yaml`'s `test.packages` isn't the
+right place to iterate on one package while you're working. Use plain `go
+test` directly for anything narrower — it reads the same `go.mod` and needs
+no config changes:
+
+```bash
+# One package
+go test ./internal/adapters/driven/llm/providers/openai/... -v
+
+# One test by name (regex-matched against the func name)
+go test ./internal/adapters/driven/llm/providers/openai/... -run TestStreamChatAssemblesToolCallAcrossChunks -v
+
+# Race + coverage for one package while iterating
+go test -race -cover ./internal/application/chatservice/...
+```
+
+Every adapter's tests are self-contained — `httptest.Server` fakes for HTTP
+adapters (`llm/providers/*`, none of them make a real network call),
+`t.TempDir()` for filesystem adapters — so none of this needs a live API key
+or network access. Testing an LLM provider adapter against the real API
+(not just its wire format) isn't wired up yet: today only `providers/xai`
+is built into `cmd/grok/main.go`'s composition root; `providers/openai` and
+the rest get a real end-to-end path once Phase 1's `llm/router` +
+multi-provider config land (see `docs/ROADMAP.md`).
+
 **Every unit test in this repo is TDD, not test-added-after**: write the
 test against the behavior you're about to add, watch it fail for the right
 reason, then write the minimum code to turn it green. See "Definition of
