@@ -14,7 +14,7 @@ import (
 
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/config/file"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/credentials/env"
-	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/llm/xai"
+	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/llm/providers/xai"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/tools/readfile"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/tools/shellexec"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driving/tui"

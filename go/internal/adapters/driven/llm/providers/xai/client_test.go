@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/llm/xai"
+	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/llm/providers/xai"
 	"github.com/vinaycharlie01/grok-build/go/internal/domain/chat"
 	"github.com/vinaycharlie01/grok-build/go/internal/domain/ports"
 )
