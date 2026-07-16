@@ -13,19 +13,14 @@ type streamEventMsg struct{ event ports.StreamEvent }
 // streamClosedMsg signals the events channel for the current turn closed.
 type streamClosedMsg struct{}
 
-const (
-	footerHeight = 3 // input line + help line + margin
-)
-
 // Update implements tea.Model.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.viewport.Width = msg.Width
-		m.viewport.Height = msg.Height - footerHeight
-		m.input.Width = msg.Width - 2
+		m.width = msg.Width
+		m.height = msg.Height
+		m.applyLayout()
 		m.ready = true
-		m.viewport.SetContent(m.transcript.String())
 		return m, nil
 
 	case tea.KeyMsg:
@@ -66,7 +61,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) submit() (tea.Model, tea.Cmd) {
 	text := m.input.Value()
-	m.appendTranscript(userStyle.Render("you") + "  " + text + "\n")
+	m.appendTranscript(userBadgeStyle.Render("YOU") + "  " + messageBodyStyle.Render(text) + "\n")
 	m.input.Reset()
 	m.waiting = true
 	m.streaming.Reset()
@@ -81,18 +76,19 @@ func (m Model) handleStreamEvent(ev ports.StreamEvent) (tea.Model, tea.Cmd) {
 	switch ev.Type {
 	case ports.EventTextDelta:
 		if m.streaming.Len() == 0 {
-			m.appendTranscript(assistantStyle.Render("grok") + " ")
+			m.appendTranscript(assistantBadgeStyle.Render("GROK") + "  ")
 		}
 		m.streaming.WriteString(ev.Text)
 		m.appendTranscript(ev.Text)
 	case ports.EventToolCall:
 		m.appendTranscript("\n" + renderToolCall(ev.ToolCall))
 	case ports.EventDone:
-		m.appendTranscript("\n\n")
+		m.appendDivider()
 		m.streaming.Reset()
 	case ports.EventError:
 		m.err = ev.Err
-		m.appendTranscript("\n" + errorStyle.Render("error: "+ev.Err.Error()) + "\n\n")
+		m.appendTranscript("\n" + renderError(ev.Err))
+		m.appendDivider()
 	}
 	return m, waitForEvent(m.events)
 }

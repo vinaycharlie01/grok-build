@@ -53,8 +53,9 @@ func TestWindowSizeMsgMarksReady(t *testing.T) {
 	if !mm.ready {
 		t.Fatal("want ready=true after a WindowSizeMsg")
 	}
-	if mm.viewport.Width != 80 {
-		t.Fatalf("viewport.Width = %d, want 80", mm.viewport.Width)
+	wantWidth := 80 - viewportStyle.GetHorizontalFrameSize()
+	if mm.viewport.Width != wantWidth {
+		t.Fatalf("viewport.Width = %d, want %d (80 minus the viewport style's border+padding frame)", mm.viewport.Width, wantWidth)
 	}
 	if got := mm.View(); got == "initializing…" {
 		t.Fatal("View() still shows the pre-ready placeholder after WindowSizeMsg")
