@@ -112,7 +112,7 @@ never visible above `internal/adapters/driven/llm/providers/*`.
 
 | Provider | Adapter package | SDK |
 |---|---|---|
-| xAI | `providers/xai` | Hand-rolled (Phase 0, already built) — xAI has no official Go SDK; the OpenAI-compatible SSE parsing already written stays as-is. |
+| xAI | *(no separate package — reuses `providers/openai.Client` pointed at `https://api.x.ai/v1`)* | [`github.com/openai/openai-go`](https://github.com/openai/openai-go) — xAI has no official Go SDK, but its API is OpenAI-wire-compatible, so it needs no hand-rolled client either. Phase 0 originally hand-rolled this (`providers/xai`, raw `net/http` + manual SSE parsing); replaced with the SDK client once `providers/openai` existed to point at instead — no raw HTTP client remains anywhere in this tree for any LLM provider. |
 | OpenAI | `providers/openai` | [`github.com/openai/openai-go`](https://github.com/openai/openai-go) |
 | Anthropic | `providers/anthropic` | [`github.com/anthropics/anthropic-sdk-go`](https://github.com/anthropics/anthropic-sdk-go) |
 | Google Gemini | `providers/gemini` | [`github.com/googleapis/go-genai`](https://github.com/googleapis/go-genai) |
@@ -202,6 +202,7 @@ choice already covers it.
 SDK choice per provider: see "Library & framework choices" → "LLM provider SDKs" above.
 - [x] Move `adapters/driven/llm/xai` → `adapters/driven/llm/providers/xai` (namespace only, no behavior change; update `cmd/grok/main.go` import).
 - [x] `providers/openai`: wraps `github.com/openai/openai-go`'s streaming chat completions + tool calling.
+- [x] Retargeted xAI onto `providers/openai.Client` (base URL `https://api.x.ai/v1`) and deleted `providers/xai`'s hand-rolled `net/http`/SSE client — no raw HTTP client remains for any LLM provider. `cmd/grok/main.go`'s provider switch collapsed to a single constructor call as a result.
 - [ ] `providers/anthropic`: wraps `github.com/anthropics/anthropic-sdk-go`'s Messages API streaming — different event shape than OpenAI-style (`content_block_delta`, `message_delta`, `tool_use` blocks), real translation logic, not a copy-paste of the xAI parser.
 - [ ] `providers/gemini`: wraps `github.com/googleapis/go-genai`'s streaming `GenerateContent`.
 - [ ] `providers/ollama`: wraps `github.com/ollama/ollama/api` for local models.

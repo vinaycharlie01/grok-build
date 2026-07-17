@@ -73,14 +73,15 @@ go test ./internal/adapters/driven/llm/providers/openai/... -run TestStreamChatA
 go test -race -cover ./internal/application/chatservice/...
 ```
 
-Every adapter's tests are self-contained — `httptest.Server` fakes for HTTP
-adapters (`llm/providers/*`, none of them make a real network call),
-`t.TempDir()` for filesystem adapters — so none of this needs a live API key
-or network access. Testing an LLM provider adapter against the real API
-(not just its wire format) isn't wired up yet: today only `providers/xai`
-is built into `cmd/grok/main.go`'s composition root; `providers/openai` and
-the rest get a real end-to-end path once Phase 1's `llm/router` +
-multi-provider config land (see `docs/ROADMAP.md`).
+Every adapter's tests are self-contained — `httptest.Server` fakes for the
+`llm/providers/openai` adapter (it never makes a real network call in
+tests), `t.TempDir()` for filesystem adapters — so none of this needs a
+live API key or network access. Testing against a *real* API is a separate
+thing from the unit tests: see "Running it against a different provider"
+below for that — it works today (xAI, OpenAI, and any OpenAI-compatible
+endpoint are all wired into `cmd/grok/main.go` already), it just needs a
+real key and network access, which the unit tests deliberately avoid
+needing.
 
 **Every unit test in this repo is TDD, not test-added-after**: write the
 test against the behavior you're about to add, watch it fail for the right
@@ -105,11 +106,16 @@ backend for manual testing. This is a stopgap ahead of Phase 1's real
 `llm/router` + multi-provider config (see `docs/ROADMAP.md`) — it selects
 exactly one provider from an env var, it doesn't route across several.
 
-| `GROK_PROVIDER` | Required env vars | What it builds |
+All three build the exact same `providers/openai.Client` (backed by the
+official `openai-go` SDK) — only the base URL, model, and credential
+differ. There is no separate hand-rolled client for xAI or anything else;
+see ROADMAP.md's "Library & framework choices" for why.
+
+| `GROK_PROVIDER` | Required env vars | Base URL |
 |---|---|---|
-| `xai` (default) | `XAI_API_KEY` | `providers/xai`, base URL from config |
-| `openai` | `OPENAI_API_KEY`, optional `GROK_MODEL` (default `gpt-4o`) | `providers/openai` against `https://api.openai.com/v1` |
-| `openaicompat` | `GROK_BASE_URL`, `GROK_MODEL`, `GROK_API_KEY` | `providers/openai` against **your** base URL — this is how you point it at OpenRouter, Groq, a local Ollama/vLLM server, or anything else that speaks the OpenAI chat-completions wire format. It's the same adapter as `openai` above; only the endpoint differs. |
+| `xai` (default) | `XAI_API_KEY` | from config (`https://api.x.ai/v1` by default) |
+| `openai` | `OPENAI_API_KEY`, optional `GROK_MODEL` (default `gpt-4o`) | `https://api.openai.com/v1` |
+| `openaicompat` | `GROK_BASE_URL`, `GROK_MODEL`, `GROK_API_KEY` | **your** base URL — this is how you point it at OpenRouter, Groq, a local Ollama/vLLM server, or anything else that speaks the OpenAI chat-completions wire format. |
 
 Example: a local Ollama server (`ollama serve`, OpenAI-compatible mode is
 built in at `/v1`):
@@ -152,8 +158,9 @@ go/
                             ConfigStore, CredentialStore) — zero external deps
   internal/application/    chatservice: the model/tool-call loop, depends
                             only on domain ports
-  internal/adapters/driven/    llm/providers/{xai,openai} (openai also
-                                serves any OpenAI-compatible endpoint),
+  internal/adapters/driven/    llm/providers/openai (SDK-backed; also
+                                serves xAI and any OpenAI-compatible
+                                endpoint — no separate xai package),
                                 config/file, credentials/env,
                                 tools/{shellexec,readfile}
   internal/adapters/driving/   tui (Bubble Tea)

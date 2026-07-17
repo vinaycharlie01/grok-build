@@ -3,6 +3,13 @@
 // client — see ROADMAP.md's "Library & framework choices". The SDK is an
 // implementation detail of this one adapter; nothing above this package
 // knows it exists.
+//
+// This client isn't OpenAI-only despite the package name: since the base
+// URL is caller-supplied (see New), it's also what cmd/grok builds for
+// xAI (OpenAI-wire-compatible) and any other OpenAI-compatible endpoint
+// (OpenRouter, Groq, a local Ollama/vLLM server, ...) — one SDK-backed
+// client, several base URLs, rather than a hand-rolled client per vendor
+// that all speak the same protocol.
 package openai
 
 import (

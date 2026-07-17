@@ -11,11 +11,14 @@ import (
 //
 // This is a manual-testing stopgap ahead of Phase 1's real llm/router +
 // multi-provider settings.Config (see ROADMAP.md): it picks exactly one
-// provider from an env var, it doesn't route across several. "openai" and
-// "openaicompat" both build a providers/openai.Client — that adapter
-// already takes an arbitrary base URL, so an OpenAI-compatible endpoint
-// (OpenRouter, Groq, a local Ollama/vLLM server, ...) needs no adapter
-// code of its own, just a different baseURL/model/credential triple.
+// provider from an env var, it doesn't route across several.
+//
+// All three names build a providers/openai.Client (backed by the official
+// github.com/openai/openai-go SDK — no hand-rolled HTTP/SSE client exists
+// anywhere in this tree). xAI's API is OpenAI-wire-compatible, so it needs
+// no client of its own, just its own base URL/credential; "openaicompat"
+// is the same story for OpenRouter, Groq, a local Ollama/vLLM server, or
+// anything else that speaks the same wire format.
 type providerChoice struct {
 	name    string // "xai" | "openai" | "openaicompat"
 	baseURL string

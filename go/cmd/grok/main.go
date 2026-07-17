@@ -1,8 +1,8 @@
 // Command grok is the composition root for the Go port of grok-build: it
-// wires driven adapters (xAI LLM client, file-backed config, env-var
-// credentials, shell/file tools) and a driving adapter (the Bubble Tea TUI)
-// together through the chatservice application layer, without any of those
-// pieces knowing about each other directly.
+// wires driven adapters (an SDK-backed LLM client, file-backed config,
+// env-var credentials, shell/file tools) and a driving adapter (the Bubble
+// Tea TUI) together through the chatservice application layer, without any
+// of those pieces knowing about each other directly.
 package main
 
 import (
@@ -15,7 +15,6 @@ import (
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/config/file"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/credentials/env"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/llm/providers/openai"
-	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/llm/providers/xai"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/tools/readfile"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/tools/shellexec"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driving/tui"
@@ -56,13 +55,12 @@ func run() error {
 		return fmt.Errorf("resolve workspace root: %w", err)
 	}
 
-	var llmClient ports.LLMProvider
-	switch choice.name {
-	case "xai":
-		llmClient = xai.New(choice.baseURL, creds)
-	default: // "openai" and "openaicompat" both speak the OpenAI wire format
-		llmClient = openai.New(choice.baseURL, creds)
-	}
+	// xAI, OpenAI, and any OpenAI-compatible endpoint all speak the same
+	// chat-completions wire format, so all three GROK_PROVIDER choices use
+	// the one SDK-backed client — see provider.go and ROADMAP.md's
+	// "Library & framework choices" for why there's no hand-rolled HTTP
+	// client for any of them.
+	llmClient := openai.New(choice.baseURL, creds)
 
 	tools := []ports.Tool{
 		shellexec.New(),
