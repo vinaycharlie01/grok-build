@@ -265,13 +265,13 @@ SDK choice per provider: see "Library & framework choices" → "LLM provider SDK
 
 ### Phase 3 — Tool ecosystem parity
 Rust reference: `xai-grok-tools`, `xai-grok-tools-api` (`grok-tools.proto`).
-- [ ] `tools/writefile`: create/overwrite a file within the workspace root (same path-escape guard as `readfile`).
+- [x] `tools/writefile`: create/overwrite a file within the workspace root (same path-escape guard as `readfile`, plus an explicit absolute-path rejection — `filepath.Join(root, "/etc/passwd")` cleans to a safe in-root path rather than actually escaping, but silently re-rooting an absolute path is a confusing outcome worth a clear error instead).
 - [ ] `tools/editfile`: hunk-based patch application (Rust reference: `xai-hunk-tracker`).
-- [ ] `tools/search`: content + glob search (ripgrep-backed via `shellexec`-style subprocess, or a pure-Go grep for the no-external-binary case).
+- [x] `tools/search`: content + glob search — pure-Go grep (`regexp` + `filepath.WalkDir`, `bufio.Scanner` per file), no external binary. The ripgrep-via-`shellexec` alternative noted here is unneeded now that this exists; revisit only if performance on very large trees demands it.
 - [ ] `tools/git`: status/diff/commit — a **runtime agent tool** (like `shellexec`), not project build tooling; still zero `.sh` files.
 - [ ] `tools.Registry`: replace the hardcoded `[]ports.Tool{...}` slice in `main.go` with a registry adapters register themselves into, so adding a tool never touches the composition root's tool list by hand.
 - [ ] JSON Schema validation of tool arguments before `Execute` is called, so malformed model-generated args produce a clear tool-result error instead of an adapter-specific panic/failure.
-- [ ] Tests for every new tool (`t.TempDir()`-based, following `readfile`/`shellexec`'s existing pattern).
+- [x] Tests for every new tool (`t.TempDir()`-based, following `readfile`/`shellexec`'s existing pattern) — `writefile` and `search` both TDD'd (test written and confirmed failing to compile before the implementation existed).
 
 ### Phase 4 — Session, memory & checkpoints
 Rust reference: `xai-chat-state`, `xai-prompt-queue`, `xai-grok-memory`, `xai-fast-worktree`, `xai-hunk-tracker`.

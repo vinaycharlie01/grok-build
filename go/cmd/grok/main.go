@@ -19,7 +19,9 @@ import (
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/llm/providers/anthropic"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/llm/providers/openai"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/tools/readfile"
+	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/tools/search"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/tools/shellexec"
+	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/tools/writefile"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driving/tui"
 	"github.com/vinaycharlie01/grok-build/go/internal/application/chatservice"
 	"github.com/vinaycharlie01/grok-build/go/internal/domain/chat"
@@ -88,6 +90,8 @@ func runInteractive(providerFlag, modelFlag string) error {
 	tools := []ports.Tool{
 		shellexec.New(),
 		readfile.New(workspaceRoot),
+		writefile.New(workspaceRoot),
+		search.New(workspaceRoot),
 	}
 
 	svc := chatservice.New(llmClient, tools)
