@@ -1,0 +1,37 @@
+# Config for github.com/nirantaraai/nava's mage/golang runner.
+# Every value here is consumed by go/magefile.go through zero-argument
+# Mage targets (`mage go:build`, `mage go:test`, ...) — this file is the
+# only place command-line flags for the Go toolchain live. There are no
+# .sh scripts anywhere in this tree; nava/Mage is the entire build path.
+directory: "."
+
+setup:
+  modDownload: true
+  modTidy: true
+
+build:
+  output: bin/grok
+  main: ./cmd/grok
+  noCGO: true
+
+run:
+  main: ./cmd/grok
+
+test:
+  packages: ["./..."]
+
+race:
+  packages: ["./..."]
+
+coverage:
+  packages: ["./..."]
+  output: coverage.out
+
+vet:
+  packages: ["./..."]
+
+lint:
+  args: ["./..."]
+
+format:
+  args: ["./..."]
