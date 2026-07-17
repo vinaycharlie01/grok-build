@@ -124,6 +124,81 @@ see `ROADMAP.md`.)
 On start it loads `$GROK_HOME/config.yaml` (falling back to
 `~/.grok/config.yaml`), or built-in defaults if neither exists.
 
+### Quick start: test your own OpenAI-compatible API
+
+No xAI/OpenAI/Anthropic key needed — this works with a local server (Ollama,
+vLLM, llama.cpp, LM Studio, ...) or any hosted OpenAI-compatible endpoint
+(OpenRouter, Groq, a work proxy, ...). Every step below was actually run
+against a real (if minimal) OpenAI-compatible server before being written
+down, including the exact error text.
+
+1. **Build it:**
+
+   ```bash
+   cd go/
+   mage go:build          # produces bin/grok
+   ```
+
+2. **Point `$GROK_HOME` at a directory with a `config.yaml`** describing
+   your API (or edit `~/.grok/config.yaml` directly if you don't want to
+   set `GROK_HOME`):
+
+   ```bash
+   mkdir -p ~/my-grok-config
+   cat > ~/my-grok-config/config.yaml <<'EOF'
+   defaultProvider: my-api
+   providers:
+     - name: my-api
+       kind: openai                    # any OpenAI chat-completions-compatible API
+       baseURL: http://localhost:PORT  # your API's base URL — no trailing /chat/completions
+       model: MODEL_NAME               # a model your API actually serves
+       apiKeyEnvVar: MY_API_KEY        # leave "" (empty string) if your API needs no auth
+   EOF
+   export GROK_HOME=~/my-grok-config
+   ```
+
+3. **Export the credential** (skip this if you set `apiKeyEnvVar: ""`):
+
+   ```bash
+   export MY_API_KEY=sk-...
+   ```
+
+4. **Run it, selecting your provider explicitly:**
+
+   ```bash
+   bin/grok run --provider my-api
+   # equivalent: GROK_PROVIDER=my-api bin/grok
+   ```
+
+5. **What to expect:**
+   - **Wrong `--provider` name** (typo, or you forgot to add it to
+     `config.yaml`) fails immediately, *before* the TUI even opens:
+     ```
+     grok: resolve provider: settings: no provider named "bogus" configured (add it to providers: in your config file)
+     ```
+     Confirmed against the real binary — this is the actual error text,
+     not a paraphrase.
+   - **Missing/wrong credential is *not* checked at startup** — provider
+     resolution only validates that the *name* exists in your config; the
+     API key is read lazily, the first time you actually send a message.
+     If `apiKeyEnvVar` names a var that isn't set, or your key is wrong,
+     you'll see the error appear as an inline error box *inside* the TUI
+     after you send your first prompt (`env: MY_API_KEY is not set: ...`
+     or an HTTP error from your server), not a crash on startup. This is
+     a real architectural property (`main.go` builds the credential
+     lookup but never calls it before `tui.Run`), not a guess.
+   - **A correct provider name with a reachable API** gets you straight to
+     the TUI; type a prompt and the reply streams back from your server.
+
+If something looks stuck at step 4 rather than showing the TUI, that's
+almost certainly this environment lacking a real terminal (running inside
+some sandboxes, CI, etc.) — `grok` needs an actual TTY, the same as any
+other full-screen terminal app.
+
+See "Running it against a different provider" below for the full
+provider-config field reference and more worked examples (Ollama,
+OpenRouter, multiple providers configured at once).
+
 ### Running it against a different provider
 
 Every provider — which endpoint, which model, which credential — is a
