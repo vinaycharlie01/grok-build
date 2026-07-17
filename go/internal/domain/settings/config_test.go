@@ -7,6 +7,14 @@ import (
 	"github.com/vinaycharlie01/grok-build/go/internal/domain/settings"
 )
 
+func TestDefaultHasNoSessionStoreConfigured(t *testing.T) {
+	cfg := settings.Default()
+
+	if cfg.SessionStore != nil {
+		t.Fatalf("Default().SessionStore = %+v, want nil (session persistence is opt-in)", cfg.SessionStore)
+	}
+}
+
 func TestDefaultHasXAIActiveByDefault(t *testing.T) {
 	cfg := settings.Default()
 

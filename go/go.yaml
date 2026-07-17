@@ -20,6 +20,17 @@ run:
 test:
   packages: ["./..."]
 
+# Integration tests (real external processes — today: MongoDB via
+# testcontainers-go) live under tests/integration/, separate from the
+# *_test.go files next to each package that test:/race:/coverage: above
+# already cover. They're gated behind the "integration" build tag so
+# `mage go:test`/`go:race`/`go:vet` (which walk ./...) never try to
+# compile or run them; `mage go:integration` is the only target that
+# does, and it requires a reachable Docker daemon.
+integration:
+  packages: ["./tests/integration/..."]
+  args: ["-tags=integration", "-v"]
+
 race:
   packages: ["./..."]
 

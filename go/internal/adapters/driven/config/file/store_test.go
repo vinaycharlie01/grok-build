@@ -45,6 +45,40 @@ func TestSaveThenLoadRoundTrips(t *testing.T) {
 	}
 }
 
+// TestSaveThenLoadRoundTripsSessionStore proves the opt-in sessionStore:
+// section round-trips through YAML, and that a config file with no such
+// section at all still loads with SessionStore nil (see
+// TestLoadMissingFileReturnsDefault / TestDefaultHasNoSessionStoreConfigured
+// in settings/config_test.go — persistence stays fully opt-in).
+func TestSaveThenLoadRoundTripsSessionStore(t *testing.T) {
+	s := file.New(filepath.Join(t.TempDir(), "config.yaml"))
+
+	want := settings.Config{
+		DefaultProvider: "xai",
+		Providers: []settings.ProviderConfig{
+			{Name: "xai", Kind: "openai", BaseURL: "https://api.x.ai/v1", Model: "grok-4", APIKeyEnvVar: "XAI_API_KEY"},
+		},
+		SystemPrompt: "be terse",
+		SessionStore: &settings.SessionStoreConfig{
+			Kind:       "mongo",
+			URI:        "mongodb://localhost:27017",
+			Database:   "grok",
+			Collection: "sessions",
+		},
+	}
+	if err := s.Save(want); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	got, err := s.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Load() = %+v, want %+v", got, want)
+	}
+}
+
 // TestSaveThenLoadRoundTripsModelsCatalog is a dedicated case for the
 // per-provider Models field: it wasn't exercised by
 // TestSaveThenLoadRoundTrips above, and pointer fields (Temperature/TopP)

@@ -18,6 +18,33 @@ type Config struct {
 	Providers []ProviderConfig `yaml:"providers"`
 	// SystemPrompt seeds every new session.
 	SystemPrompt string `yaml:"systemPrompt"`
+	// SessionStore configures persisting chat sessions across process
+	// restarts (Phase 4 — see ROADMAP.md). Nil (the zero value, and what
+	// Default() returns) means no persistence: chatservice/the TUI behave
+	// exactly as before this field existed, a fresh in-memory session
+	// every run. Persistence is opt-in, never a silent default.
+	SessionStore *SessionStoreConfig `yaml:"sessionStore,omitempty"`
+}
+
+// SessionStoreConfig configures the ports.SessionStore adapter cmd/grok
+// wires in when session persistence is enabled.
+type SessionStoreConfig struct {
+	// Kind selects which adapter to construct. "mongo" (backed by the
+	// official mongo-go-driver, internal/adapters/driven/sessionstore/mongo)
+	// is the only kind implemented today.
+	Kind string `yaml:"kind"`
+	// URI is the backend's connection string (e.g.
+	// "mongodb://user:pass@host:27017" for kind: mongo). Credentials
+	// belong in the URI here rather than a separate env-var-keyed
+	// credential, unlike ProviderConfig.APIKeyEnvVar — a session store is
+	// local infrastructure the operator controls, not a third-party API
+	// key. Use your deployment's own secret-injection mechanism (env var
+	// expansion, mounted file) to avoid committing it to the config file.
+	URI string `yaml:"uri"`
+	// Database is the database name to use.
+	Database string `yaml:"database"`
+	// Collection is the collection (kind: mongo) sessions are stored in.
+	Collection string `yaml:"collection"`
 }
 
 // ProviderConfig describes one configured LLM backend.
