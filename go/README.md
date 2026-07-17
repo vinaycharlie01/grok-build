@@ -126,63 +126,89 @@ On start it loads `$GROK_HOME/config.yaml` (falling back to
 
 ### Running it against a different provider
 
-`cmd/grok` defaults to xAI, but reads `GROK_PROVIDER` to pick a different
-backend for manual testing. This is a stopgap ahead of Phase 1's real
-`llm/router` + multi-provider config (see `docs/ROADMAP.md`) — it selects
-exactly one provider from an env var, it doesn't route across several.
+Every provider — which endpoint, which model, which credential — is a
+named entry in your config file's `providers:` list, not a pile of env
+vars. Selecting *which one* is active is the only thing a flag/env var
+controls: `--provider <name>` (falls back to `GROK_PROVIDER`, falls back
+to the config's `defaultProvider`). Adding a new provider — even one
+speaking to a service nobody's heard of — means adding an entry to the
+config file, never changing Go code, as long as it speaks one of the two
+wire formats already implemented (`kind: openai` or `kind: anthropic`).
 
-`xai`, `openai`, and `openaicompat` all build the exact same
-`providers/openai.Client` (backed by the official `openai-go` SDK) — only
-the base URL, model, and credential differ, since all three speak the same
-wire format. `anthropic` builds a separate `providers/anthropic.Client`
-(backed by the official `anthropic-sdk-go` SDK) because Claude's Messages
-API is a genuinely different wire format, not just a different base URL.
-There is no hand-rolled HTTP client for any provider; see ROADMAP.md's
-"Library & framework choices" for why.
+If no config file exists yet, `settings.Default()` pre-populates three
+entries — `xai` (active by default), `openai`, `anthropic` — each pointed
+at its real API with the matching env var name (`XAI_API_KEY`,
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). Edit `$GROK_HOME/config.yaml` (or
+`~/.grok/config.yaml`) to change models, add your own endpoints, or change
+the default:
 
-| `GROK_PROVIDER` | Required env vars | Base URL / notes |
-|---|---|---|
-| `xai` (default) | `XAI_API_KEY` | from config (`https://api.x.ai/v1` by default) |
-| `openai` | `OPENAI_API_KEY`, optional `GROK_MODEL` (default `gpt-4o`) | `https://api.openai.com/v1` |
-| `openaicompat` | `GROK_BASE_URL`, `GROK_MODEL`, `GROK_API_KEY` | **your** base URL — this is how you point it at OpenRouter, Groq, a local Ollama/vLLM server, or anything else that speaks the OpenAI chat-completions wire format. |
-| `anthropic` | `ANTHROPIC_API_KEY`, optional `GROK_MODEL` (default `claude-sonnet-5`) | `https://api.anthropic.com` |
+```yaml
+defaultProvider: xai
+systemPrompt: "You are Grok Build, a terminal coding agent."
+providers:
+  - name: xai
+    kind: openai       # wire-format family, not vendor - see below
+    baseURL: https://api.x.ai/v1
+    model: grok-4
+    apiKeyEnvVar: XAI_API_KEY
 
-Example: a local Ollama server (`ollama serve`, OpenAI-compatible mode is
-built in at `/v1`):
+  - name: openai
+    kind: openai
+    baseURL: https://api.openai.com/v1
+    model: gpt-4o
+    apiKeyEnvVar: OPENAI_API_KEY
 
-```bash
-export GROK_PROVIDER=openaicompat
-export GROK_BASE_URL=http://localhost:11434/v1
-export GROK_MODEL=llama3
-export GROK_API_KEY=ollama   # most local servers ignore the value but still require the header to be present
-mage go:run
+  - name: anthropic
+    kind: anthropic     # Claude's Messages API - a genuinely different
+    baseURL: https://api.anthropic.com  # wire format, not just a base URL
+    model: claude-sonnet-5
+    apiKeyEnvVar: ANTHROPIC_API_KEY
+
+  # Anything OpenAI-wire-compatible works the same way - no code change,
+  # just another entry. A local Ollama server:
+  - name: home-ollama
+    kind: openai
+    baseURL: http://localhost:11434/v1
+    model: llama3
+    apiKeyEnvVar: ""    # empty = no credential needed (env.NoAuth) -
+                        # most local servers don't check auth at all
+
+  # Or OpenRouter:
+  - name: openrouter
+    kind: openai
+    baseURL: https://openrouter.ai/api/v1
+    model: openai/gpt-4o-mini   # or any model OpenRouter serves
+    apiKeyEnvVar: OPENROUTER_API_KEY
 ```
 
-Example: OpenRouter:
+`kind: openai` covers xAI, OpenAI itself, and any OpenAI-compatible
+endpoint (OpenRouter, Groq, a local Ollama/vLLM server, ...) through the
+one SDK-backed `providers/openai.Client`. `kind: anthropic` uses
+`providers/anthropic.Client` — Claude's Messages API isn't OpenAI-wire-compatible, so it gets its own client, not a base-URL variant of the
+OpenAI one. There is no hand-rolled HTTP client for any provider; see
+ROADMAP.md's "Library & framework choices" for why.
+
+Then pick one:
 
 ```bash
-export GROK_PROVIDER=openaicompat
-export GROK_BASE_URL=https://openrouter.ai/api/v1
-export GROK_MODEL=openai/gpt-4o-mini   # or any model OpenRouter serves
-export GROK_API_KEY=sk-or-...
-mage go:run
-```
+export XAI_API_KEY=sk-...
+mage go:run                          # uses defaultProvider (xai)
 
-Example: Anthropic:
-
-```bash
-export GROK_PROVIDER=anthropic
-export ANTHROPIC_API_KEY=sk-ant-...
-mage go:run
+grok run --provider home-ollama      # no API key needed at all
+GROK_PROVIDER=anthropic grok run     # env var works the same as the flag
 ```
 
 If you don't have an xAI key and just want to confirm the binary itself
-works, `openaicompat` against a local server needs no paid API key at all.
+works, a local `home-ollama`-style entry needs no paid API key at all.
 
-The selection logic (`resolveProviderChoice` in `cmd/grok/provider.go`) is
-unit tested — `go test ./cmd/grok/... -v` — against fake env vars, so you
-don't need any of these servers running to verify the *logic* is correct;
-you only need one running to actually talk to a model.
+The selection logic (`resolveProviderName` in `cmd/grok/provider.go`,
+`Config.Provider` in `internal/domain/settings`) is unit tested —
+`go test ./cmd/grok/... ./internal/domain/settings/... -v` — against fake
+env vars and an in-memory config, so you don't need any of these servers
+running to verify the *logic* is correct; you only need one running to
+actually talk to a model. An unconfigured `--provider` name fails fast
+with a clear error naming what you asked for, not a generic "no
+credentials" message three layers down.
 
 ## Layout
 
@@ -191,12 +217,15 @@ go/
   cmd/grok/                composition root (main.go: runInteractive wires
                             every adapter together) — the only place
                             concrete adapters get wired together;
-                            provider.go picks xai/openai/openaicompat/
-                            anthropic from GROK_PROVIDER (see "Running it");
-                            cli.go is the Cobra command tree (run, version);
-                            version.go holds the ldflags-injectable vars
+                            provider.go is just resolveProviderName
+                            (--provider flag > GROK_PROVIDER > config
+                            default — see "Running it"); cli.go is the
+                            Cobra command tree (run, version); version.go
+                            holds the ldflags-injectable vars
   internal/domain/         chat entities + ports (LLMProvider, Tool,
-                            ConfigStore, CredentialStore) — zero external deps
+                            ConfigStore, CredentialStore) + settings
+                            (Config.Providers, Config.Provider(name)) —
+                            zero external deps
   internal/application/    chatservice: the model/tool-call loop, depends
                             only on domain ports
   internal/adapters/driven/    llm/providers/{openai,anthropic} — openai is

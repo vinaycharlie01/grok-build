@@ -35,8 +35,9 @@ func main() {
 
 // runInteractive wires every adapter together and launches the TUI. It's
 // the composition root's actual entrypoint; cli.go's RunE funcs (bare
-// `grok` and `grok run`) both call it directly.
-func runInteractive() error {
+// `grok` and `grok run`) both call it directly, passing the --provider
+// flag value through.
+func runInteractive(providerFlag string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -50,30 +51,37 @@ func runInteractive() error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	choice, err := resolveProviderChoice(os.Getenv, cfg)
+	providerName := resolveProviderName(providerFlag, os.Getenv)
+	chosen, err := cfg.Provider(providerName)
 	if err != nil {
 		return fmt.Errorf("resolve provider: %w", err)
 	}
-	creds := env.New(choice.credVar, os.LookupEnv)
+
+	var creds ports.CredentialStore
+	if chosen.APIKeyEnvVar == "" {
+		creds = env.NoAuth{}
+	} else {
+		creds = env.New(chosen.APIKeyEnvVar, os.LookupEnv)
+	}
 
 	workspaceRoot, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("resolve workspace root: %w", err)
 	}
 
-	// xAI, OpenAI, and any OpenAI-compatible endpoint all speak the same
-	// chat-completions wire format, so those three GROK_PROVIDER choices
-	// use the one SDK-backed openai.Client — see provider.go and
-	// ROADMAP.md's "Library & framework choices" for why there's no
-	// hand-rolled HTTP client for any provider in this tree. Anthropic's
-	// Messages API is a different wire format, so it gets its own
-	// SDK-backed client rather than being forced through the same one.
+	// Kind names a wire-format family, not a vendor: "openai" covers xAI,
+	// OpenAI itself, and any OpenAI-compatible endpoint (OpenRouter, Groq,
+	// a local Ollama/vLLM server, ...) via the one SDK-backed
+	// openai.Client — see ROADMAP.md's "Library & framework choices" for
+	// why there's no hand-rolled HTTP client for any provider in this
+	// tree. "anthropic" is a genuinely different wire format, so it gets
+	// its own SDK-backed client rather than being forced through the OpenAI one.
 	var llmClient ports.LLMProvider
-	switch choice.name {
+	switch chosen.Kind {
 	case "anthropic":
-		llmClient = anthropic.New(choice.baseURL, creds)
+		llmClient = anthropic.New(chosen.BaseURL, creds)
 	default:
-		llmClient = openai.New(choice.baseURL, creds)
+		llmClient = openai.New(chosen.BaseURL, creds)
 	}
 
 	tools := []ports.Tool{
@@ -82,7 +90,7 @@ func runInteractive() error {
 	}
 
 	svc := chatservice.New(llmClient, tools)
-	session := chat.NewSession("local", choice.model, cfg.SystemPrompt)
+	session := chat.NewSession("local", chosen.Model, cfg.SystemPrompt)
 
 	return tui.Run(ctx, svc, session)
 }

@@ -1,93 +1,14 @@
 package main
 
-import (
-	"fmt"
-
-	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/credentials/env"
-	"github.com/vinaycharlie01/grok-build/go/internal/domain/settings"
-)
-
-// providerChoice is the result of resolving which LLM backend to build.
-//
-// This is a manual-testing stopgap ahead of Phase 1's real llm/router +
-// multi-provider settings.Config (see ROADMAP.md): it picks exactly one
-// provider from an env var, it doesn't route across several.
-//
-// "xai", "openai", and "openaicompat" all build a providers/openai.Client
-// (backed by the official github.com/openai/openai-go SDK — no
-// hand-rolled HTTP/SSE client exists anywhere in this tree). xAI's API is
-// OpenAI-wire-compatible, so it needs no client of its own, just its own
-// base URL/credential; "openaicompat" is the same story for OpenRouter,
-// Groq, a local Ollama/vLLM server, or anything else that speaks the same
-// wire format. "anthropic" builds a providers/anthropic.Client instead —
-// Claude's Messages API is a different wire format, not OpenAI-compatible.
-type providerChoice struct {
-	name    string // "xai" | "openai" | "openaicompat" | "anthropic"
-	baseURL string
-	model   string
-	credVar string
-}
-
-// resolveProviderChoice reads GROK_PROVIDER (default "xai") and its
-// provider-specific env vars via getenv, so it's unit-testable without
-// touching the real environment.
-func resolveProviderChoice(getenv func(string) string, cfg settings.Config) (providerChoice, error) {
-	name := getenv("GROK_PROVIDER")
-	if name == "" {
-		name = "xai"
+// resolveProviderName is the only provider-selection logic in this
+// binary: it picks the --provider flag value if set, else GROK_PROVIDER,
+// else empty (meaning "use settings.Config.DefaultProvider"). Everything
+// else about a provider — endpoint, model, credential env var — lives in
+// the config file's providers: list (see internal/domain/settings), not
+// in flags or env vars. Adding a new provider is a config file edit.
+func resolveProviderName(flagValue string, getenv func(string) string) string {
+	if flagValue != "" {
+		return flagValue
 	}
-	model := getenv("GROK_MODEL")
-
-	switch name {
-	case "xai":
-		return providerChoice{
-			name:    name,
-			baseURL: cfg.BaseURL,
-			model:   firstNonEmpty(model, cfg.DefaultModel),
-			credVar: env.DefaultVarName,
-		}, nil
-
-	case "openai":
-		return providerChoice{
-			name:    name,
-			baseURL: "https://api.openai.com/v1",
-			model:   firstNonEmpty(model, "gpt-4o"),
-			credVar: "OPENAI_API_KEY",
-		}, nil
-
-	case "openaicompat":
-		baseURL := getenv("GROK_BASE_URL")
-		if baseURL == "" {
-			return providerChoice{}, fmt.Errorf("GROK_PROVIDER=openaicompat requires GROK_BASE_URL to be set")
-		}
-		if model == "" {
-			return providerChoice{}, fmt.Errorf("GROK_PROVIDER=openaicompat requires GROK_MODEL to be set")
-		}
-		return providerChoice{
-			name:    name,
-			baseURL: baseURL,
-			model:   model,
-			credVar: "GROK_API_KEY",
-		}, nil
-
-	case "anthropic":
-		return providerChoice{
-			name:    name,
-			baseURL: "https://api.anthropic.com",
-			model:   firstNonEmpty(model, "claude-sonnet-5"),
-			credVar: "ANTHROPIC_API_KEY",
-		}, nil
-
-	default:
-		return providerChoice{}, fmt.Errorf("unknown GROK_PROVIDER %q (want xai, openai, openaicompat, or anthropic)", name)
-	}
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
+	return getenv("GROK_PROVIDER")
 }
