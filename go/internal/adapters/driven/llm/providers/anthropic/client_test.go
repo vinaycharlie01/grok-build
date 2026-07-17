@@ -1,0 +1,285 @@
+package anthropic_test
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/llm/providers/anthropic"
+	"github.com/vinaycharlie01/grok-build/go/internal/domain/chat"
+	"github.com/vinaycharlie01/grok-build/go/internal/domain/ports"
+)
+
+type fakeCreds struct{ key string }
+
+func (f fakeCreds) APIKey() (string, error) { return f.key, nil }
+
+type failingCreds struct{}
+
+func (failingCreds) APIKey() (string, error) { return "", fmt.Errorf("no credentials configured") }
+
+// Anthropic's SSE frames carry both an "event: <type>" line and a
+// "data: <json>" line. These small structs + json.Marshal build
+// well-formed fixtures without hand-typed JSON (the class of bug the xai
+// provider's tests hit before being simplified) while staying much
+// smaller than a full type hierarchy for the wire format.
+type sseContentBlockStart struct {
+	Type         string `json:"type"`
+	Index        int    `json:"index"`
+	ContentBlock struct {
+		Type string `json:"type"`
+		ID   string `json:"id,omitempty"`
+		Name string `json:"name,omitempty"`
+	} `json:"content_block"`
+}
+
+type sseContentBlockDelta struct {
+	Type  string `json:"type"`
+	Index int    `json:"index"`
+	Delta struct {
+		Type        string `json:"type"`
+		Text        string `json:"text,omitempty"`
+		PartialJSON string `json:"partial_json,omitempty"`
+	} `json:"delta"`
+}
+
+func sseFrame(t *testing.T, eventType string, payload any) string {
+	t.Helper()
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal fixture: %v", err)
+	}
+	return "event: " + eventType + "\ndata: " + string(data) + "\n\n"
+}
+
+func sseTextDelta(t *testing.T, index int, text string) string {
+	e := sseContentBlockDelta{Type: "content_block_delta", Index: index}
+	e.Delta.Type = "text_delta"
+	e.Delta.Text = text
+	return sseFrame(t, "content_block_delta", e)
+}
+
+func sseToolUseStart(t *testing.T, index int, id, name string) string {
+	e := sseContentBlockStart{Type: "content_block_start", Index: index}
+	e.ContentBlock.Type = "tool_use"
+	e.ContentBlock.ID = id
+	e.ContentBlock.Name = name
+	return sseFrame(t, "content_block_start", e)
+}
+
+func sseToolUseArgs(t *testing.T, index int, partialJSON string) string {
+	e := sseContentBlockDelta{Type: "content_block_delta", Index: index}
+	e.Delta.Type = "input_json_delta"
+	e.Delta.PartialJSON = partialJSON
+	return sseFrame(t, "content_block_delta", e)
+}
+
+func sseMessageStop(t *testing.T) string {
+	return sseFrame(t, "message_stop", map[string]string{"type": "message_stop"})
+}
+
+func TestStreamChatParsesTextDeltas(t *testing.T) {
+	sseBody := sseTextDelta(t, 0, "Hel") + sseTextDelta(t, 0, "lo") + sseMessageStop(t)
+
+	client := anthropic.New(newSSEServer(t, sseBody), fakeCreds{key: "test-key"})
+	session := chat.NewSession("s1", "claude-sonnet-5", "")
+
+	got := drain(t, client, session)
+
+	if len(got) != 3 { // 2 deltas + done
+		t.Fatalf("want 3 events, got %d: %+v", len(got), got)
+	}
+	if got[0].Type != ports.EventTextDelta || got[0].Text != "Hel" {
+		t.Fatalf("event[0] = %+v, want text delta %q", got[0], "Hel")
+	}
+	if got[1].Type != ports.EventTextDelta || got[1].Text != "lo" {
+		t.Fatalf("event[1] = %+v, want text delta %q", got[1], "lo")
+	}
+	if got[2].Type != ports.EventDone {
+		t.Fatalf("event[2] = %+v, want EventDone", got[2])
+	}
+}
+
+func TestStreamChatAssemblesToolCallAcrossChunks(t *testing.T) {
+	sseBody := sseToolUseStart(t, 0, "toolu_1", "get_weather") +
+		sseToolUseArgs(t, 0, `{"city":`) +
+		sseToolUseArgs(t, 0, `"NYC"}`) +
+		sseMessageStop(t)
+
+	client := anthropic.New(newSSEServer(t, sseBody), fakeCreds{key: "test-key"})
+	session := chat.NewSession("s1", "claude-sonnet-5", "")
+
+	got := drain(t, client, session)
+
+	want := chat.ToolCall{ID: "toolu_1", Name: "get_weather", Arguments: `{"city":"NYC"}`}
+	if len(got) != 2 { // 1 assembled tool call + done
+		t.Fatalf("want 2 events, got %d: %+v", len(got), got)
+	}
+	if got[0].Type != ports.EventToolCall || got[0].ToolCall != want {
+		t.Fatalf("event[0] = %+v, want ToolCall %+v", got[0], want)
+	}
+	if got[1].Type != ports.EventDone {
+		t.Fatalf("event[1] = %+v, want EventDone", got[1])
+	}
+}
+
+func TestStreamChatSendsXAPIKeyHeader(t *testing.T) {
+	var gotKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey = r.Header.Get("X-Api-Key")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, sseMessageStop(t))
+	}))
+	defer srv.Close()
+
+	client := anthropic.New(srv.URL, fakeCreds{key: "test-key"})
+	drain(t, client, chat.NewSession("s1", "claude-sonnet-5", ""))
+
+	if gotKey != "test-key" {
+		t.Fatalf("X-Api-Key header = %q, want %q", gotKey, "test-key")
+	}
+}
+
+func TestStreamChatSendsSystemPromptSeparatelyAndToolResultsAsUserMessages(t *testing.T) {
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, sseMessageStop(t))
+	}))
+	defer srv.Close()
+
+	client := anthropic.New(srv.URL, fakeCreds{key: "test-key"})
+	session := chat.NewSession("s1", "claude-sonnet-5", "be terse")
+	session.Append(chat.AssistantMessage("", []chat.ToolCall{
+		{ID: "toolu_1", Name: "get_weather", Arguments: `{"city":"NYC"}`},
+	}))
+	session.Append(chat.ToolMessage(chat.ToolResult{ToolCallID: "toolu_1", Content: "sunny"}))
+
+	tools := []ports.ToolSpec{{
+		Name:        "get_weather",
+		Description: "gets the weather for a city",
+		JSONSchema:  `{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}`,
+	}}
+
+	if _, err := client.StreamChat(context.Background(), session, tools); err != nil {
+		t.Fatalf("StreamChat() error = %v", err)
+	}
+
+	var req struct {
+		System []struct {
+			Text string `json:"text"`
+		} `json:"system"`
+		Messages []struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type      string `json:"type"`
+				ID        string `json:"id"`
+				Name      string `json:"name"`
+				ToolUseID string `json:"tool_use_id"`
+				// tool_result content is itself a list of blocks (Anthropic
+				// wraps a plain string result in a single text block), not
+				// a bare string.
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"content"`
+		} `json:"messages"`
+		Tools []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			InputSchema struct {
+				Properties map[string]any `json:"properties"`
+				Required   []string       `json:"required"`
+			} `json:"input_schema"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(gotBody, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v\nbody: %s", err, gotBody)
+	}
+
+	if len(req.System) != 1 || req.System[0].Text != "be terse" {
+		t.Fatalf("system = %+v, want a single block with %q (Anthropic takes the system prompt as a top-level field, not a message)", req.System, "be terse")
+	}
+
+	// assistant(tool_use), user(tool_result) - no separate "tool" role in
+	// Anthropic's API; tool results are user-role content blocks.
+	if len(req.Messages) != 2 {
+		t.Fatalf("want 2 messages, got %d: %s", len(req.Messages), gotBody)
+	}
+	assistantMsg := req.Messages[0]
+	if assistantMsg.Role != "assistant" || len(assistantMsg.Content) != 1 || assistantMsg.Content[0].Type != "tool_use" || assistantMsg.Content[0].Name != "get_weather" {
+		t.Fatalf("messages[0] = %+v, want an assistant tool_use block for get_weather", assistantMsg)
+	}
+	toolResultMsg := req.Messages[1]
+	if toolResultMsg.Role != "user" || len(toolResultMsg.Content) != 1 || toolResultMsg.Content[0].Type != "tool_result" || toolResultMsg.Content[0].ToolUseID != "toolu_1" {
+		t.Fatalf("messages[1] = %+v, want a user tool_result block for toolu_1", toolResultMsg)
+	}
+	if resultText := toolResultMsg.Content[0].Content; len(resultText) != 1 || resultText[0].Text != "sunny" {
+		t.Fatalf("tool_result content = %+v, want a single text block %q", resultText, "sunny")
+	}
+
+	if len(req.Tools) != 1 || req.Tools[0].Name != "get_weather" {
+		t.Fatalf("tools = %+v, want one get_weather tool", req.Tools)
+	}
+	if req.Tools[0].InputSchema.Properties["city"] == nil {
+		t.Fatalf("tools[0].InputSchema.Properties = %+v, missing city", req.Tools[0].InputSchema.Properties)
+	}
+}
+
+func TestStreamChatPropagatesHTTPErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"error":{"type":"authentication_error","message":"invalid api key"}}`)
+	}))
+	defer srv.Close()
+
+	client := anthropic.New(srv.URL, fakeCreds{key: "bad-key"})
+	session := chat.NewSession("s1", "claude-sonnet-5", "")
+
+	if _, err := client.StreamChat(context.Background(), session, nil); err == nil {
+		t.Fatal("StreamChat() error = nil, want error for HTTP 401")
+	}
+}
+
+func TestStreamChatPropagatesCredentialError(t *testing.T) {
+	client := anthropic.New("http://unused.invalid", failingCreds{})
+	session := chat.NewSession("s1", "claude-sonnet-5", "")
+
+	if _, err := client.StreamChat(context.Background(), session, nil); err == nil {
+		t.Fatal("StreamChat() error = nil, want error when CredentialStore fails")
+	}
+}
+
+// newSSEServer starts a test server that always replies with body as an
+// SSE stream and returns its URL; the server is closed when t completes.
+func newSSEServer(t *testing.T, body string) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// drain runs one turn and collects every event it produces.
+func drain(t *testing.T, client *anthropic.Client, session *chat.Session) []ports.StreamEvent {
+	t.Helper()
+	events, err := client.StreamChat(context.Background(), session, nil)
+	if err != nil {
+		t.Fatalf("StreamChat() error = %v", err)
+	}
+	var got []ports.StreamEvent
+	for ev := range events {
+		got = append(got, ev)
+	}
+	return got
+}

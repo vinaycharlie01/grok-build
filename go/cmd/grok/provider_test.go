@@ -48,6 +48,30 @@ func TestResolveProviderChoiceOpenAI(t *testing.T) {
 	}
 }
 
+func TestResolveProviderChoiceAnthropic(t *testing.T) {
+	choice, err := resolveProviderChoice(fakeGetenv(map[string]string{"GROK_PROVIDER": "anthropic"}), settings.Config{})
+	if err != nil {
+		t.Fatalf("resolveProviderChoice() error = %v", err)
+	}
+	want := providerChoice{name: "anthropic", baseURL: "https://api.anthropic.com", model: "claude-sonnet-5", credVar: "ANTHROPIC_API_KEY"}
+	if choice != want {
+		t.Fatalf("resolveProviderChoice() = %+v, want %+v", choice, want)
+	}
+}
+
+func TestResolveProviderChoiceAnthropicModelOverride(t *testing.T) {
+	choice, err := resolveProviderChoice(fakeGetenv(map[string]string{
+		"GROK_PROVIDER": "anthropic",
+		"GROK_MODEL":    "claude-haiku-4-5",
+	}), settings.Config{})
+	if err != nil {
+		t.Fatalf("resolveProviderChoice() error = %v", err)
+	}
+	if choice.model != "claude-haiku-4-5" {
+		t.Fatalf("model = %q, want %q", choice.model, "claude-haiku-4-5")
+	}
+}
+
 func TestResolveProviderChoiceOpenAIModelOverride(t *testing.T) {
 	choice, err := resolveProviderChoice(fakeGetenv(map[string]string{
 		"GROK_PROVIDER": "openai",

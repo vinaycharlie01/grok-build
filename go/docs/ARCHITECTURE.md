@@ -32,11 +32,11 @@ frameworks' ideas *do* get used (as design references for later phases).
    driving adapters  │   internal/adapters/     │  driven adapters
    (call in)         │       driving/           │  (called out to)
                       ─────────────────────────
-        tui  ───────▶ │                          │ ◀─────── openai (SDK-backed;
-   (future: cli,      │   internal/application/  │          serves xAI + OpenAI-
-    headless, ACP)    │      chatservice         │          compatible too — see
-                      │        (use cases)        │          ROADMAP.md)  config/file
-                      └──────────┬────────────────┘          credentials/env
+        tui  ───────▶ │                          │ ◀─────── openai + anthropic
+   (future: cli,      │   internal/application/  │          (both SDK-backed; openai
+    headless, ACP)    │      chatservice         │          also serves xAI +
+                      │        (use cases)        │          OpenAI-compat — ROADMAP.md)
+                      └──────────┬────────────────┘          config/file, credentials/env
                                  │                             tools/shellexec
                       ┌──────────▼────────────────┐            tools/readfile
                       │   internal/domain/         │  (future: openai/
@@ -72,7 +72,8 @@ tool-call loop → TUI) but covers a small fraction of the Rust surface.
 | Go package | Rust crate(s) it stands in for | Status |
 |---|---|---|
 | `domain/chat`, `application/chatservice` | `xai-grok-agent`, `xai-chat-state`, `xai-prompt-queue` | Minimal vertical slice (single-session, no persistence, no subagents) |
-| `adapters/driven/llm/providers/openai` | `xai-grok-http`, model-facing parts of `xai-grok-shell` | The one `ports.LLMProvider` implementation, backed by the official `openai-go` SDK. Serves xAI, OpenAI, and any OpenAI-compatible endpoint (all speak the same wire format) by base URL alone — see `cmd/grok/provider.go`. Anthropic/Gemini/Ollama-native next (see `ROADMAP.md` Phase 1); no leader/relay/remote modes |
+| `adapters/driven/llm/providers/openai` | `xai-grok-http`, model-facing parts of `xai-grok-shell` | Backed by the official `openai-go` SDK. Serves xAI, OpenAI, and any OpenAI-compatible endpoint (all speak the same wire format) by base URL alone — see `cmd/grok/provider.go`. |
+| `adapters/driven/llm/providers/anthropic` | same Rust crates, Claude-specific path | Backed by the official `anthropic-sdk-go` SDK; a genuinely different `ports.LLMProvider` implementation, not a base-URL variant of the OpenAI one — Anthropic's Messages API has a different wire shape (system prompt as a top-level field, no "tool" role, `X-Api-Key` auth). Gemini/Ollama-native next (see `ROADMAP.md` Phase 1); no leader/relay/remote modes |
 | `adapters/driven/config/file` | `xai-grok-config`, `xai-grok-config-types` | One flat YAML file; no managed-config layering, no TOML editing |
 | `adapters/driven/credentials/env` | `xai-grok-auth`, `xai-grok-secrets` | Env-var API key only — **no OAuth device-code flow yet** |
 | `adapters/driven/tools/shellexec`, `tools/readfile` | `xai-grok-tools`, `xai-grok-tools-api` (see its `grok-tools.proto`) | 2 of many tools; in-process `ports.Tool`, not the real gRPC `GrokToolsService` |

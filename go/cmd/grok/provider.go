@@ -13,14 +13,16 @@ import (
 // multi-provider settings.Config (see ROADMAP.md): it picks exactly one
 // provider from an env var, it doesn't route across several.
 //
-// All three names build a providers/openai.Client (backed by the official
-// github.com/openai/openai-go SDK — no hand-rolled HTTP/SSE client exists
-// anywhere in this tree). xAI's API is OpenAI-wire-compatible, so it needs
-// no client of its own, just its own base URL/credential; "openaicompat"
-// is the same story for OpenRouter, Groq, a local Ollama/vLLM server, or
-// anything else that speaks the same wire format.
+// "xai", "openai", and "openaicompat" all build a providers/openai.Client
+// (backed by the official github.com/openai/openai-go SDK — no
+// hand-rolled HTTP/SSE client exists anywhere in this tree). xAI's API is
+// OpenAI-wire-compatible, so it needs no client of its own, just its own
+// base URL/credential; "openaicompat" is the same story for OpenRouter,
+// Groq, a local Ollama/vLLM server, or anything else that speaks the same
+// wire format. "anthropic" builds a providers/anthropic.Client instead —
+// Claude's Messages API is a different wire format, not OpenAI-compatible.
 type providerChoice struct {
-	name    string // "xai" | "openai" | "openaicompat"
+	name    string // "xai" | "openai" | "openaicompat" | "anthropic"
 	baseURL string
 	model   string
 	credVar string
@@ -68,8 +70,16 @@ func resolveProviderChoice(getenv func(string) string, cfg settings.Config) (pro
 			credVar: "GROK_API_KEY",
 		}, nil
 
+	case "anthropic":
+		return providerChoice{
+			name:    name,
+			baseURL: "https://api.anthropic.com",
+			model:   firstNonEmpty(model, "claude-sonnet-5"),
+			credVar: "ANTHROPIC_API_KEY",
+		}, nil
+
 	default:
-		return providerChoice{}, fmt.Errorf("unknown GROK_PROVIDER %q (want xai, openai, or openaicompat)", name)
+		return providerChoice{}, fmt.Errorf("unknown GROK_PROVIDER %q (want xai, openai, openaicompat, or anthropic)", name)
 	}
 }
 

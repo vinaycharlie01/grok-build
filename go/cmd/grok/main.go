@@ -14,6 +14,7 @@ import (
 
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/config/file"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/credentials/env"
+	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/llm/providers/anthropic"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/llm/providers/openai"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/tools/readfile"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/tools/shellexec"
@@ -56,11 +57,19 @@ func run() error {
 	}
 
 	// xAI, OpenAI, and any OpenAI-compatible endpoint all speak the same
-	// chat-completions wire format, so all three GROK_PROVIDER choices use
-	// the one SDK-backed client — see provider.go and ROADMAP.md's
-	// "Library & framework choices" for why there's no hand-rolled HTTP
-	// client for any of them.
-	llmClient := openai.New(choice.baseURL, creds)
+	// chat-completions wire format, so those three GROK_PROVIDER choices
+	// use the one SDK-backed openai.Client — see provider.go and
+	// ROADMAP.md's "Library & framework choices" for why there's no
+	// hand-rolled HTTP client for any provider in this tree. Anthropic's
+	// Messages API is a different wire format, so it gets its own
+	// SDK-backed client rather than being forced through the same one.
+	var llmClient ports.LLMProvider
+	switch choice.name {
+	case "anthropic":
+		llmClient = anthropic.New(choice.baseURL, creds)
+	default:
+		llmClient = openai.New(choice.baseURL, creds)
+	}
 
 	tools := []ports.Tool{
 		shellexec.New(),

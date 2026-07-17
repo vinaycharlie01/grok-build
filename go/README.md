@@ -99,23 +99,28 @@ mage go:run
 On start it loads `$GROK_HOME/config.yaml` (falling back to
 `~/.grok/config.yaml`), or built-in defaults if neither exists.
 
-### Running it against a different provider (OpenAI, or any OpenAI-compatible endpoint)
+### Running it against a different provider
 
 `cmd/grok` defaults to xAI, but reads `GROK_PROVIDER` to pick a different
 backend for manual testing. This is a stopgap ahead of Phase 1's real
 `llm/router` + multi-provider config (see `docs/ROADMAP.md`) — it selects
 exactly one provider from an env var, it doesn't route across several.
 
-All three build the exact same `providers/openai.Client` (backed by the
-official `openai-go` SDK) — only the base URL, model, and credential
-differ. There is no separate hand-rolled client for xAI or anything else;
-see ROADMAP.md's "Library & framework choices" for why.
+`xai`, `openai`, and `openaicompat` all build the exact same
+`providers/openai.Client` (backed by the official `openai-go` SDK) — only
+the base URL, model, and credential differ, since all three speak the same
+wire format. `anthropic` builds a separate `providers/anthropic.Client`
+(backed by the official `anthropic-sdk-go` SDK) because Claude's Messages
+API is a genuinely different wire format, not just a different base URL.
+There is no hand-rolled HTTP client for any provider; see ROADMAP.md's
+"Library & framework choices" for why.
 
-| `GROK_PROVIDER` | Required env vars | Base URL |
+| `GROK_PROVIDER` | Required env vars | Base URL / notes |
 |---|---|---|
 | `xai` (default) | `XAI_API_KEY` | from config (`https://api.x.ai/v1` by default) |
 | `openai` | `OPENAI_API_KEY`, optional `GROK_MODEL` (default `gpt-4o`) | `https://api.openai.com/v1` |
 | `openaicompat` | `GROK_BASE_URL`, `GROK_MODEL`, `GROK_API_KEY` | **your** base URL — this is how you point it at OpenRouter, Groq, a local Ollama/vLLM server, or anything else that speaks the OpenAI chat-completions wire format. |
+| `anthropic` | `ANTHROPIC_API_KEY`, optional `GROK_MODEL` (default `claude-sonnet-5`) | `https://api.anthropic.com` |
 
 Example: a local Ollama server (`ollama serve`, OpenAI-compatible mode is
 built in at `/v1`):
@@ -138,6 +143,14 @@ export GROK_API_KEY=sk-or-...
 mage go:run
 ```
 
+Example: Anthropic:
+
+```bash
+export GROK_PROVIDER=anthropic
+export ANTHROPIC_API_KEY=sk-ant-...
+mage go:run
+```
+
 If you don't have an xAI key and just want to confirm the binary itself
 works, `openaicompat` against a local server needs no paid API key at all.
 
@@ -152,15 +165,17 @@ you only need one running to actually talk to a model.
 go/
   cmd/grok/                composition root (main.go) — the only place
                             concrete adapters get wired together;
-                            provider.go picks xai/openai/openaicompat from
-                            GROK_PROVIDER (see "Running it" above)
+                            provider.go picks xai/openai/openaicompat/
+                            anthropic from GROK_PROVIDER (see "Running it")
   internal/domain/         chat entities + ports (LLMProvider, Tool,
                             ConfigStore, CredentialStore) — zero external deps
   internal/application/    chatservice: the model/tool-call loop, depends
                             only on domain ports
-  internal/adapters/driven/    llm/providers/openai (SDK-backed; also
-                                serves xAI and any OpenAI-compatible
-                                endpoint — no separate xai package),
+  internal/adapters/driven/    llm/providers/{openai,anthropic} — openai is
+                                SDK-backed and also serves xAI and any
+                                OpenAI-compatible endpoint (no separate xai
+                                package); anthropic is its own SDK-backed
+                                client (different wire format) —
                                 config/file, credentials/env,
                                 tools/{shellexec,readfile}
   internal/adapters/driving/   tui (Bubble Tea)
