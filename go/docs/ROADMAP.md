@@ -161,8 +161,10 @@ The simple file-backed adapter stays the MVP (see Phase 4's task list). For
 the production-grade adapter behind the same port:
 - [ ] [Qdrant Go client](https://github.com/qdrant/go-client) or
       [Weaviate Go client](https://github.com/weaviate/weaviate-go-client), or
-- [ ] PostgreSQL + `pgvector` (fits well if Phase 4's session store already
-      lands on Postgres instead of SQLite for a given deployment)
+- [ ] MongoDB Atlas Vector Search via the official
+      [`mongo-go-driver`](https://github.com/mongodb/mongo-go-driver) (fits
+      well if Phase 4's session store already lands on MongoDB instead of
+      SQLite for a given deployment)
 
 Pick one when Phase 4 starts, driven by whatever the session-store decision
 ends up being — don't stand up a second database system if the first
@@ -272,9 +274,9 @@ Rust reference: `xai-grok-tools`, `xai-grok-tools-api` (`grok-tools.proto`).
 
 ### Phase 4 — Session, memory & checkpoints
 Rust reference: `xai-chat-state`, `xai-prompt-queue`, `xai-grok-memory`, `xai-fast-worktree`, `xai-hunk-tracker`.
-- [ ] `ports.SessionStore` + a JSON-file adapter (start simple); SQLite adapter later using a **pure-Go** driver (`modernc.org/sqlite`), consistent with the pure-Go principle.
+- [ ] `ports.SessionStore` + a JSON-file adapter (start simple); MongoDB adapter later using the official [`mongo-go-driver`](https://github.com/mongodb/mongo-go-driver), integration-tested with [`testcontainers-go`](https://github.com/testcontainers/testcontainers-go) spinning up a real `mongod` container — no hand-rolled wire protocol, consistent with the official-SDK-only principle used for the LLM providers.
 - [ ] Prompt queue for multi-turn interleaving (Rust reference: `xai-prompt-queue`).
-- [ ] Long-term memory port + simple file-backed adapter (MVP); vector search adapter (Qdrant/Weaviate/pgvector — see "Library & framework choices" → "Memory & vector search") is an explicit stretch goal, not required for Phase 4 to ship.
+- [ ] Long-term memory port + simple file-backed adapter (MVP); vector search adapter (Qdrant/Weaviate/MongoDB Atlas Vector Search — see "Library & framework choices" → "Memory & vector search") is an explicit stretch goal, not required for Phase 4 to ship.
 - [ ] Checkpoint/worktree snapshotting before risky tool calls, git-worktree-based (Rust reference: `xai-fast-worktree`).
 
 ### Phase 5 — MCP (Model Context Protocol)
