@@ -36,8 +36,8 @@ func main() {
 // runInteractive wires every adapter together and launches the TUI. It's
 // the composition root's actual entrypoint; cli.go's RunE funcs (bare
 // `grok` and `grok run`) both call it directly, passing the --provider
-// flag value through.
-func runInteractive(providerFlag string) error {
+// and --model flag values through.
+func runInteractive(providerFlag, modelFlag string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -56,6 +56,7 @@ func runInteractive(providerFlag string) error {
 	if err != nil {
 		return fmt.Errorf("resolve provider: %w", err)
 	}
+	chosen.Model = resolveModelID(modelFlag, os.Getenv, chosen.Model)
 
 	var creds ports.CredentialStore
 	if chosen.APIKeyEnvVar == "" {

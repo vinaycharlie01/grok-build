@@ -8,9 +8,16 @@ import (
 
 // providerFlag is the name of the one flag governing provider selection.
 // Its GROK_PROVIDER env var equivalent is handled in resolveProviderName
-// (provider.go); everything else about a provider — endpoint, model,
-// credential — lives in the config file, not in flags.
+// (provider.go); everything else about a provider — endpoint, credential —
+// lives in the config file, not in flags.
 const providerFlag = "provider"
+
+// modelFlag overrides the selected provider's default Model. Its
+// GROK_MODEL env var equivalent is handled in resolveModelID (model.go).
+// A model's richer metadata (context window, sampling defaults, API
+// backend) still comes only from the config file's Models catalog, keyed
+// by whatever id this flag resolves to.
+const modelFlag = "model"
 
 // newRootCmd builds the grok command tree. Bare `grok` (no subcommand)
 // launches the interactive TUI — same as `grok run` — so existing muscle
@@ -33,10 +40,11 @@ func newRootCmd() *cobra.Command {
 		// try to start a chat session.
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runInteractive(providerFlagValue(cmd))
+			return runInteractive(providerFlagValue(cmd), modelFlagValue(cmd))
 		},
 	}
 	root.PersistentFlags().String(providerFlag, "", "provider to use (by name, from the config file's providers: list); overrides GROK_PROVIDER")
+	root.PersistentFlags().String(modelFlag, "", "model id to use, overriding the selected provider's default model; overrides GROK_MODEL")
 
 	root.AddCommand(newRunCmd())
 	root.AddCommand(newVersionCmd())
@@ -50,7 +58,7 @@ func newRunCmd() *cobra.Command {
 		Short: "Launch the interactive TUI (same as running grok with no subcommand)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runInteractive(providerFlagValue(cmd))
+			return runInteractive(providerFlagValue(cmd), modelFlagValue(cmd))
 		},
 	}
 }
@@ -73,5 +81,13 @@ func newVersionCmd() *cobra.Command {
 // not a user-facing one — an empty string is a safe zero value either way.
 func providerFlagValue(cmd *cobra.Command) string {
 	v, _ := cmd.Flags().GetString(providerFlag)
+	return v
+}
+
+// modelFlagValue reads --model off cmd the same way providerFlagValue
+// reads --provider — a persistent flag always defined on root, so a
+// lookup miss here would be a programming error, not a user-facing one.
+func modelFlagValue(cmd *cobra.Command) string {
+	v, _ := cmd.Flags().GetString(modelFlag)
 	return v
 }

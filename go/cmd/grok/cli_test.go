@@ -62,6 +62,14 @@ func TestRunSubcommandRunEIsSetWithoutLaunchingTUI(t *testing.T) {
 	}
 }
 
+func TestNewRootCmdHasModelFlag(t *testing.T) {
+	root := newRootCmd()
+
+	if root.PersistentFlags().Lookup(modelFlag) == nil {
+		t.Fatalf("root command has no persistent --%s flag", modelFlag)
+	}
+}
+
 func TestUnknownSubcommandErrors(t *testing.T) {
 	root := newRootCmd()
 	root.SetOut(new(bytes.Buffer))

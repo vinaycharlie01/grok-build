@@ -263,7 +263,57 @@ one SDK-backed `providers/openai.Client`. `kind: anthropic` uses
 OpenAI one. There is no hand-rolled HTTP client for any provider; see
 ROADMAP.md's "Library & framework choices" for why.
 
-Then pick one:
+#### Selecting a model, and an optional per-provider model catalog
+
+`model:` on a provider entry is its default model id and needs nothing
+else — that's the whole story for most entries above. On top of it, a
+provider can optionally list a `models:` catalog giving each model id
+richer metadata (context window, sampling defaults, which API backend it
+expects, public availability) — the Go port of the Rust reference's
+`xai-grok-models` crate (`default_models.json`). `settings.Default()`'s
+`xai` entry ships one real example, ported verbatim from that file:
+
+```yaml
+  - name: xai
+    kind: openai
+    baseURL: https://api.x.ai/v1
+    model: grok-4
+    apiKeyEnvVar: XAI_API_KEY
+    models:
+      - id: grok-4
+        name: Grok 4
+        description: General-purpose flagship model
+        contextWindow: 256000
+        apiBackend: chat_completions
+        supportedInAPI: true
+
+      - id: grok-build
+        name: Grok Build
+        description: Best for advanced coding tasks
+        contextWindow: 500000
+        temperature: 0.7
+        topP: 0.95
+        apiBackend: responses
+        supportedInAPI: false
+```
+
+A `models:` catalog is entirely optional — a provider with none still
+works exactly as before, `ModelInfo(id)` just returns a minimal entry
+carrying only the id (see `internal/domain/settings/config.go`). Nothing
+consumes the metadata yet (it's forward-looking for Phase 4's
+context-window-aware auto-compact — see ROADMAP.md); today it's there to
+select and document models, not to change request behavior.
+
+Override which model id is actually requested with `--model` (falls back
+to `GROK_MODEL`, falls back to the selected provider's `model:`) — the
+exact same precedence shape as `--provider`/`GROK_PROVIDER`:
+
+```bash
+grok run --provider xai --model grok-build   # picks grok-build over xai's default (grok-4)
+GROK_MODEL=grok-4-fast grok run              # env var works the same as the flag
+```
+
+Then pick one provider:
 
 ```bash
 export XAI_API_KEY=sk-...
