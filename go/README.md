@@ -108,6 +108,19 @@ export XAI_API_KEY=sk-...
 mage go:run
 ```
 
+That's the same as `grok` or `grok run` on the built binary — bare
+invocation launches the TUI. `grok version` prints version info without
+touching any of the chat/provider machinery, and `grok --help` lists every
+subcommand:
+
+```bash
+$ bin/grok version
+grok dev (commit unknown, built unknown)
+```
+
+(`dev`/`unknown` until Phase 11 wires up build-time `-ldflags` injection —
+see `ROADMAP.md`.)
+
 On start it loads `$GROK_HOME/config.yaml` (falling back to
 `~/.grok/config.yaml`), or built-in defaults if neither exists.
 
@@ -175,10 +188,13 @@ you only need one running to actually talk to a model.
 
 ```
 go/
-  cmd/grok/                composition root (main.go) — the only place
+  cmd/grok/                composition root (main.go: runInteractive wires
+                            every adapter together) — the only place
                             concrete adapters get wired together;
                             provider.go picks xai/openai/openaicompat/
-                            anthropic from GROK_PROVIDER (see "Running it")
+                            anthropic from GROK_PROVIDER (see "Running it");
+                            cli.go is the Cobra command tree (run, version);
+                            version.go holds the ldflags-injectable vars
   internal/domain/         chat entities + ports (LLMProvider, Tool,
                             ConfigStore, CredentialStore) — zero external deps
   internal/application/    chatservice: the model/tool-call loop, depends

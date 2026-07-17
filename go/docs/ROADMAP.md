@@ -121,11 +121,17 @@ never visible above `internal/adapters/driven/llm/providers/*`.
 
 ### CLI (Phase 1)
 
-- [ ] Wire [Cobra](https://github.com/spf13/cobra) into `cmd/grok/main.go`: a
-      `run` subcommand (today's default TUI launch), a `version` subcommand,
-      room for a future `headless`/`mcp-server` subcommand (Phase 5). Purely
-      a driving-adapter/composition-root concern — no domain or application
-      changes.
+- [x] Wire [Cobra](https://github.com/spf13/cobra) into `cmd/grok`: bare
+      `grok` and `grok run` both launch the TUI (`runInteractive` in
+      `main.go`, unchanged behavior — `cli.go` just routes to it),
+      `grok version` prints `Version`/`Commit`/`BuildDate` (`version.go`,
+      exact names nava's `versionPkg` build option expects — Phase 11
+      wires the `-ldflags` injection, these are `"dev"`/`"unknown"` until
+      then). Root uses `Args: cobra.NoArgs` so an unrecognized subcommand
+      errors instead of silently falling through to a TUI launch. Room
+      left for a future `headless`/`mcp-server` subcommand (Phase 5).
+      Purely a driving-adapter/composition-root concern — no domain or
+      application changes. `cmd/grok` test coverage 40.5% → 46.4%.
 - [ ] Evaluate [Viper](https://github.com/spf13/viper) for config loading
       (env var + flag + file precedence) as an enhancement to
       `adapters/driven/config/file`; only adopt if it doesn't compromise the

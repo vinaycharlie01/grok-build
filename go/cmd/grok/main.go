@@ -2,7 +2,9 @@
 // wires driven adapters (an SDK-backed LLM client, file-backed config,
 // env-var credentials, shell/file tools) and a driving adapter (the Bubble
 // Tea TUI) together through the chatservice application layer, without any
-// of those pieces knowing about each other directly.
+// of those pieces knowing about each other directly. See cli.go for the
+// Cobra command tree (bare `grok` and `grok run` both call runInteractive
+// below; `grok version` doesn't touch any of this).
 package main
 
 import (
@@ -25,13 +27,16 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
+	if err := newRootCmd().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "grok:", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+// runInteractive wires every adapter together and launches the TUI. It's
+// the composition root's actual entrypoint; cli.go's RunE funcs (bare
+// `grok` and `grok run`) both call it directly.
+func runInteractive() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
