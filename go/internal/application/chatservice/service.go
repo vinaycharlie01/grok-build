@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"strings"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/vinaycharlie01/grok-build/go/internal/domain/chat"
 	"github.com/vinaycharlie01/grok-build/go/internal/domain/ports"
 )
@@ -21,15 +23,19 @@ import (
 // misbehaving model looping forever.
 var ErrMaxToolHops = errors.New("chatservice: exceeded max tool-call hops for this turn")
 
-const defaultMaxToolHops = 8
+const (
+	defaultMaxToolHops        = 8
+	defaultMaxConcurrentTools = 4
+)
 
 // Service is the composition point between an LLMProvider and the set of
 // Tools available to it.
 type Service struct {
-	llm         ports.LLMProvider
-	tools       map[string]ports.Tool
-	toolSpecs   []ports.ToolSpec
-	maxToolHops int
+	llm                ports.LLMProvider
+	tools              map[string]ports.Tool
+	toolSpecs          []ports.ToolSpec
+	maxToolHops        int
+	maxConcurrentTools int
 }
 
 // Option configures a Service at construction time.
@@ -41,12 +47,28 @@ func WithMaxToolHops(n int) Option {
 	return func(s *Service) { s.maxToolHops = n }
 }
 
+// WithMaxConcurrentTools overrides how many tool calls from a single
+// model turn may execute at once. A turn that requests, say, three
+// independent file reads shouldn't wait for them one at a time — but an
+// unbounded fan-out is its own risk (a model requesting 50 tool calls at
+// once shouldn't spawn 50 goroutines), hence a cap rather than "all of
+// them, always." Values less than 1 are clamped to 1.
+func WithMaxConcurrentTools(n int) Option {
+	return func(s *Service) {
+		if n < 1 {
+			n = 1
+		}
+		s.maxConcurrentTools = n
+	}
+}
+
 // New builds a Service wired to the given LLMProvider and Tool set.
 func New(llm ports.LLMProvider, tools []ports.Tool, opts ...Option) *Service {
 	s := &Service{
-		llm:         llm,
-		tools:       make(map[string]ports.Tool, len(tools)),
-		maxToolHops: defaultMaxToolHops,
+		llm:                llm,
+		tools:              make(map[string]ports.Tool, len(tools)),
+		maxToolHops:        defaultMaxToolHops,
+		maxConcurrentTools: defaultMaxConcurrentTools,
 	}
 	for _, t := range tools {
 		s.tools[t.Name()] = t
@@ -112,13 +134,36 @@ func (s *Service) run(ctx context.Context, session *chat.Session, out chan<- por
 			return
 		}
 
-		for _, call := range calls {
-			session.Append(chat.ToolMessage(s.executeTool(ctx, call)))
+		for _, result := range s.executeToolsConcurrently(ctx, calls) {
+			session.Append(chat.ToolMessage(result))
 		}
 		// Loop: feed tool results back to the model for the next hop.
 	}
 
 	emit(ctx, out, ports.StreamEvent{Type: ports.EventError, Err: ErrMaxToolHops})
+}
+
+// executeToolsConcurrently runs every call from one turn in parallel, up
+// to maxConcurrentTools at a time, and returns their results in the same
+// order calls were given — not completion order. Each goroutine writes
+// to its own index of a pre-sized slice, so there's no shared mutable
+// state between them and nothing to race on; errgroup.SetLimit bounds
+// how many run at once so a turn with many tool calls can't fan out
+// unboundedly.
+func (s *Service) executeToolsConcurrently(ctx context.Context, calls []chat.ToolCall) []chat.ToolResult {
+	results := make([]chat.ToolResult, len(calls))
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(s.maxConcurrentTools)
+	for i, call := range calls {
+		g.Go(func() error {
+			results[i] = s.executeTool(gctx, call)
+			return nil // executeTool reports failure via ToolResult.IsError, never a Go error
+		})
+	}
+	_ = g.Wait() // never non-nil: no Go() func above returns an error
+
+	return results
 }
 
 func (s *Service) executeTool(ctx context.Context, call chat.ToolCall) chat.ToolResult {

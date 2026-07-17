@@ -215,7 +215,7 @@ SDK choice per provider: see "Library & framework choices" → "LLM provider SDK
 
 ### Phase 2 — Concurrency & performance hardening
 - [ ] `internal/adapters/driven/llm/resilience`: circuit breaker wrapping any `ports.LLMProvider` (CLOSED/OPEN/HALF_OPEN, config-driven threshold + reset timeout, lazy recovery on read — no background timer goroutine needed, matching the lazy-recovery pattern OmniRoute uses).
-- [ ] Concurrent tool-call execution in `chatservice.run`: replace the sequential `for _, call := range calls` loop with `errgroup.WithContext` bounded by a configurable max-parallelism, preserving deterministic ordering of tool-result messages appended back to the session.
+- [x] Concurrent tool-call execution in `chatservice.run`: replaced the sequential `for _, call := range calls` loop with `errgroup.WithContext` bounded by `WithMaxConcurrentTools` (default 4), preserving deterministic ordering of tool-result messages (each goroutine writes its own pre-sized slice index, so results land in call order regardless of completion order). Pulled forward from Phase 2 ahead of the rest of that phase — tests cover the parallelism speedup, order preservation despite completion order, and the concurrency cap, all `-race` clean.
 - [ ] `internal/application/sessionmanager`: registry of concurrent sessions (`sync.Map` or mutex-guarded map), needed before any multi-session/headless mode.
 - [ ] Streaming backpressure policy documented and enforced on every SSE consumer (bounded channel, explicit slow-consumer behavior).
 - [ ] Add `go.uber.org/goleak` (or equivalent) to every adapter test package's `TestMain`, catching goroutine leaks automatically instead of relying on manual review.

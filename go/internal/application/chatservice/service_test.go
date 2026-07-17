@@ -3,8 +3,10 @@ package chatservice_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/vinaycharlie01/grok-build/go/internal/application/chatservice"
 	"github.com/vinaycharlie01/grok-build/go/internal/domain/chat"
@@ -197,4 +199,129 @@ func TestSendStopsOnContextCancellation(t *testing.T) {
 	// The channel must still close even though the turn was cancelled
 	// mid-flight; drain must not hang.
 	drain(events)
+}
+
+func TestSendExecutesToolCallsConcurrently(t *testing.T) {
+	const delay = 50 * time.Millisecond
+
+	llm := &scriptedLLM{script: func(call int) []ports.StreamEvent {
+		if call == 0 {
+			return []ports.StreamEvent{
+				{Type: ports.EventToolCall, ToolCall: chat.ToolCall{ID: "1", Name: "a", Arguments: "{}"}},
+				{Type: ports.EventToolCall, ToolCall: chat.ToolCall{ID: "2", Name: "b", Arguments: "{}"}},
+			}
+		}
+		return []ports.StreamEvent{{Type: ports.EventTextDelta, Text: "done"}}
+	}}
+
+	sleepTool := func(name string) *fakeTool {
+		return &fakeTool{name: name, fn: func(string) (string, error) {
+			time.Sleep(delay)
+			return name + " done", nil
+		}}
+	}
+
+	svc := chatservice.New(llm, []ports.Tool{sleepTool("a"), sleepTool("b")})
+	session := chat.NewSession("s1", "grok-4", "")
+
+	start := time.Now()
+	drain(svc.Send(context.Background(), session, "run both"))
+	elapsed := time.Since(start)
+
+	// Sequential execution would take >= 2*delay; concurrent execution
+	// should finish in about one delay. Use 1.5x as the cutoff for
+	// scheduler slack without weakening the assertion to meaninglessness.
+	if elapsed >= delay+delay/2 {
+		t.Fatalf("Send() took %v, want well under %v — two %v tool calls should run concurrently, not sequentially", elapsed, delay+delay/2, delay)
+	}
+}
+
+func TestSendPreservesToolResultOrderDespiteCompletionOrder(t *testing.T) {
+	llm := &scriptedLLM{script: func(call int) []ports.StreamEvent {
+		if call == 0 {
+			return []ports.StreamEvent{
+				{Type: ports.EventToolCall, ToolCall: chat.ToolCall{ID: "1", Name: "slow", Arguments: "{}"}},
+				{Type: ports.EventToolCall, ToolCall: chat.ToolCall{ID: "2", Name: "fast", Arguments: "{}"}},
+			}
+		}
+		return []ports.StreamEvent{{Type: ports.EventTextDelta, Text: "done"}}
+	}}
+
+	slow := &fakeTool{name: "slow", fn: func(string) (string, error) {
+		time.Sleep(40 * time.Millisecond)
+		return "slow result", nil
+	}}
+	fast := &fakeTool{name: "fast", fn: func(string) (string, error) {
+		return "fast result", nil
+	}}
+
+	svc := chatservice.New(llm, []ports.Tool{slow, fast})
+	session := chat.NewSession("s1", "grok-4", "")
+
+	drain(svc.Send(context.Background(), session, "run both"))
+
+	// user, assistant(2 tool calls), tool(slow), tool(fast), assistant("done")
+	if len(session.Messages) != 5 {
+		t.Fatalf("want 5 session messages, got %d: %+v", len(session.Messages), session.Messages)
+	}
+	if got := session.Messages[2].ToolResult.Content; got != "slow result" {
+		t.Fatalf("messages[2] (first tool result) = %q, want %q (call order, not completion order)", got, "slow result")
+	}
+	if got := session.Messages[3].ToolResult.Content; got != "fast result" {
+		t.Fatalf("messages[3] (second tool result) = %q, want %q", got, "fast result")
+	}
+}
+
+func TestWithMaxConcurrentToolsLimitsParallelism(t *testing.T) {
+	const numCalls = 5
+	const limit = 2
+
+	var mu sync.Mutex
+	current, maxSeen := 0, 0
+	track := func(string) (string, error) {
+		mu.Lock()
+		current++
+		if current > maxSeen {
+			maxSeen = current
+		}
+		mu.Unlock()
+
+		time.Sleep(20 * time.Millisecond)
+
+		mu.Lock()
+		current--
+		mu.Unlock()
+		return "ok", nil
+	}
+
+	calls := make([]ports.StreamEvent, numCalls)
+	tools := make([]ports.Tool, numCalls)
+	for i := 0; i < numCalls; i++ {
+		name := fmt.Sprintf("tool%d", i)
+		calls[i] = ports.StreamEvent{Type: ports.EventToolCall, ToolCall: chat.ToolCall{ID: fmt.Sprintf("%d", i), Name: name, Arguments: "{}"}}
+		tools[i] = &fakeTool{name: name, fn: track}
+	}
+
+	llm := &scriptedLLM{script: func(call int) []ports.StreamEvent {
+		if call == 0 {
+			return calls
+		}
+		return []ports.StreamEvent{{Type: ports.EventTextDelta, Text: "done"}}
+	}}
+
+	svc := chatservice.New(llm, tools, chatservice.WithMaxConcurrentTools(limit))
+	session := chat.NewSession("s1", "grok-4", "")
+
+	drain(svc.Send(context.Background(), session, "run all"))
+
+	mu.Lock()
+	gotMax := maxSeen
+	mu.Unlock()
+
+	if gotMax > limit {
+		t.Fatalf("observed max concurrency = %d, want <= %d", gotMax, limit)
+	}
+	if gotMax < 2 {
+		t.Fatalf("observed max concurrency = %d, want at least 2 — tools should run in parallel up to the limit, not one at a time", gotMax)
+	}
 }
