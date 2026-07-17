@@ -202,3 +202,55 @@ func TestWaitForEventTranslatesChannel(t *testing.T) {
 		t.Fatal("want streamClosedMsg once the channel is closed")
 	}
 }
+
+// TestSequentialUpdatesAcrossValueCopiesDoNotPanic simulates the real
+// Bubble Tea event loop: Update takes and returns tea.Model by value on
+// every single call, so the framework copies our Model constantly. Every
+// prior test in this file called submit/handleStreamEvent/Update exactly
+// once on a freshly-constructed model, which never exercises writing to
+// the same logical model's transcript/streaming buffers across more than
+// one value-copy — exactly the scenario that panics with "strings:
+// illegal use of non-zero Builder copied by value" if those fields are
+// plain strings.Builder values instead of pointers. This test reassigns
+// through the tea.Model interface on every step, the same way
+// bubbletea.Program.Run's real event loop does, specifically to catch
+// that class of bug.
+func TestSequentialUpdatesAcrossValueCopiesDoNotPanic(t *testing.T) {
+	var tm tea.Model = newTestModel()
+
+	step := func(msg tea.Msg) {
+		t.Helper()
+		var cmd tea.Cmd
+		tm, cmd = tm.Update(msg)
+		if cmd != nil {
+			if resultMsg := cmd(); resultMsg != nil {
+				tm, _ = tm.Update(resultMsg)
+			}
+		}
+	}
+
+	step(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	mm := tm.(Model)
+	mm.input.SetValue("first message")
+	tm = mm
+
+	step(tea.KeyMsg{Type: tea.KeyEnter}) // submit() writes to transcript for the 2nd time overall
+	step(streamEventMsg{event: ports.StreamEvent{Type: ports.EventTextDelta, Text: "chunk one "}})
+	step(streamEventMsg{event: ports.StreamEvent{Type: ports.EventTextDelta, Text: "chunk two"}})
+	step(streamEventMsg{event: ports.StreamEvent{Type: ports.EventDone}})
+	step(streamClosedMsg{})
+
+	mm = tm.(Model)
+	mm.input.SetValue("second message")
+	tm = mm
+	step(tea.KeyMsg{Type: tea.KeyEnter}) // a 2nd full turn - more copies, more writes
+
+	final := tm.(Model)
+	got := final.transcript.String()
+	for _, want := range []string{"first message", "chunk one", "chunk two", "second message"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("transcript = %q, want it to contain %q", got, want)
+		}
+	}
+}

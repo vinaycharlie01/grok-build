@@ -20,6 +20,16 @@ func TestAPIKeyEmptyReturnsError(t *testing.T) {
 	}
 }
 
+func TestNoAuthReturnsEmptyKeyWithoutError(t *testing.T) {
+	got, err := (env.NoAuth{}).APIKey()
+	if err != nil {
+		t.Fatalf("NoAuth.APIKey() error = %v, want nil for a provider that needs no credential", err)
+	}
+	if got != "" {
+		t.Fatalf("NoAuth.APIKey() = %q, want empty", got)
+	}
+}
+
 func TestAPIKeyPresent(t *testing.T) {
 	s := env.New("XAI_API_KEY", func(name string) (string, bool) {
 		if name == "XAI_API_KEY" {

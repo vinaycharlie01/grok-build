@@ -29,3 +29,11 @@ func (s *Store) APIKey() (string, error) {
 	}
 	return v, nil
 }
+
+// NoAuth is a ports.CredentialStore for providers configured with an empty
+// APIKeyEnvVar — some local model servers accept unauthenticated requests,
+// and forcing an env var lookup for them would just be friction.
+type NoAuth struct{}
+
+// APIKey implements ports.CredentialStore.
+func (NoAuth) APIKey() (string, error) { return "", nil }

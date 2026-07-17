@@ -99,6 +99,20 @@ var (
 )
 
 // Model is the Bubble Tea model for the chat TUI.
+//
+// transcript/streaming are *strings.Builder, not strings.Builder — Bubble
+// Tea's Update/View take and return Model by value on every single call,
+// so the framework copies this struct constantly. strings.Builder embeds
+// a self-referential pointer it uses to detect exactly that ("strings:
+// illegal use of non-zero Builder copied by value") and panics the moment
+// a copy gets written to after the original already was — which will
+// eventually happen over a long-running session even though it isn't
+// reliably reproducible in a quick synchronous test (it depends on actual
+// memory addresses across the real async event loop's goroutines/GC
+// activity, not just call order). A pointer field sidesteps the whole
+// problem: copying Model copies the pointer, not the Builder it points
+// to, so every copy still writes to the same underlying buffer safely.
+// Never make either of these a value field again.
 type Model struct {
 	ctx     context.Context
 	svc     *chatservice.Service
@@ -108,8 +122,8 @@ type Model struct {
 	viewport viewport.Model
 	spinner  spinner.Model
 
-	transcript strings.Builder // rendered history, fed into the viewport
-	streaming  strings.Builder // in-flight assistant text for the current turn
+	transcript *strings.Builder // rendered history, fed into the viewport
+	streaming  *strings.Builder // in-flight assistant text for the current turn
 
 	events  <-chan ports.StreamEvent
 	waiting bool
@@ -135,12 +149,14 @@ func New(ctx context.Context, svc *chatservice.Service, session *chat.Session) M
 	sp.Style = lipgloss.NewStyle().Foreground(colorAccent)
 
 	return Model{
-		ctx:      ctx,
-		svc:      svc,
-		session:  session,
-		input:    ti,
-		spinner:  sp,
-		viewport: viewport.New(80, 20),
+		ctx:        ctx,
+		svc:        svc,
+		session:    session,
+		input:      ti,
+		spinner:    sp,
+		viewport:   viewport.New(80, 20),
+		transcript: &strings.Builder{},
+		streaming:  &strings.Builder{},
 	}
 }
 

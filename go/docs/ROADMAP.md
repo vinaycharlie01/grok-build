@@ -117,15 +117,26 @@ never visible above `internal/adapters/driven/llm/providers/*`.
 | Anthropic | `providers/anthropic` ✅ built | [`github.com/anthropics/anthropic-sdk-go`](https://github.com/anthropics/anthropic-sdk-go) |
 | Google Gemini | `providers/gemini` | [`github.com/googleapis/go-genai`](https://github.com/googleapis/go-genai) |
 | Ollama (local) | `providers/ollama` | [`github.com/ollama/ollama/api`](https://github.com/ollama/ollama/tree/main/api) — native client, not the generic OpenAI-compat path |
-| Other OpenAI-compatible (OpenRouter, Groq, vLLM, Ollama, ...) | *(no separate package — reuses `providers/openai.Client` with a config-supplied `BaseURL`)* | `github.com/openai/openai-go` pointed at a configurable `BaseURL` — see `cmd/grok/provider.go`'s `GROK_PROVIDER=openaicompat` path for the manual-testing version of this today |
+| Other OpenAI-compatible (OpenRouter, Groq, vLLM, Ollama, ...) | *(no separate package — reuses `providers/openai.Client` with a config-supplied `BaseURL`)* | `github.com/openai/openai-go` pointed at a configurable `BaseURL` — add a `kind: openai` entry to the config file's `providers:` list, see README.md's "Running it against a different provider" |
 
 ### CLI (Phase 1)
 
-- [ ] Wire [Cobra](https://github.com/spf13/cobra) into `cmd/grok/main.go`: a
-      `run` subcommand (today's default TUI launch), a `version` subcommand,
-      room for a future `headless`/`mcp-server` subcommand (Phase 5). Purely
-      a driving-adapter/composition-root concern — no domain or application
-      changes.
+- [x] Wire [Cobra](https://github.com/spf13/cobra) into `cmd/grok`: bare
+      `grok` and `grok run` both launch the TUI (`runInteractive` in
+      `main.go`, unchanged behavior — `cli.go` just routes to it),
+      `grok version` prints `Version`/`Commit`/`BuildDate` (`version.go`,
+      exact names nava's `versionPkg` build option expects — Phase 11
+      wires the `-ldflags` injection, these are `"dev"`/`"unknown"` until
+      then). Root uses `Args: cobra.NoArgs` so an unrecognized subcommand
+      errors instead of silently falling through to a TUI launch. Room
+      left for a future `headless`/`mcp-server` subcommand (Phase 5).
+      Purely a driving-adapter/composition-root concern — no domain or
+      application changes. `cmd/grok` test coverage 40.5% → 46.4%.
+- [x] Added the `--provider` persistent flag (root + `run` both read it)
+      as the one flag/env var governing which config file provider entry
+      is active — see "Multi-provider architecture" above. This is the
+      *only* provider-related flag; everything else lives in the config
+      file, not more flags.
 - [ ] Evaluate [Viper](https://github.com/spf13/viper) for config loading
       (env var + flag + file precedence) as an enhancement to
       `adapters/driven/config/file`; only adopt if it doesn't compromise the
@@ -183,10 +194,36 @@ choice already covers it.
 
 ## Multi-provider architecture
 
-- New adapter tree: `internal/adapters/driven/llm/providers/{xai,openai,anthropic,gemini,openaicompat}`, each implementing the existing `ports.LLMProvider` interface unchanged — no port changes required, because the interface was already provider-agnostic from Phase 0.
-- New composite adapter `internal/adapters/driven/llm/router`: itself a `ports.LLMProvider` that wraps N other `ports.LLMProvider`s and applies a routing strategy (`priority`, `round-robin` first; more later). Because it satisfies the same port, `chatservice` needs zero changes to go from one provider to a routed pool of them.
-- `settings.Config` grows a `Providers []ProviderConfig` list (name, base URL, credential var, model list, default flag) and a `Router {Strategy string; Order []string}` section.
-- `CredentialStore` becomes provider-keyed; the `env` adapter reads e.g. `XAI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`. OAuth adapters (matching Rust's `xai-grok-auth` device-code flow) are a later, explicit task per provider — not blocking Phase 1.
+**Built:** `internal/domain/settings.Config` has a `Providers []ProviderConfig`
+list and a `DefaultProvider` name — `Config.Provider(name)` looks one up,
+falling back to `DefaultProvider` when name is empty. Each `ProviderConfig`
+is `{Name, Kind, BaseURL, Model, APIKeyEnvVar}`; `Kind` (`"openai"` or
+`"anthropic"`) picks which SDK-backed client `cmd/grok/main.go` constructs
+— it names a *wire-format family*, not a vendor, so `Kind: "openai"`
+covers xAI, OpenAI itself, and any OpenAI-compatible endpoint (OpenRouter,
+Groq, a local Ollama/vLLM server, ...). **Adding a new provider — even one
+nobody's heard of — is a config file edit, never a Go change, as long as
+it speaks one of the two wire formats already implemented.** Selection at
+runtime is one flag/env var: `--provider` (falls back to `GROK_PROVIDER`,
+falls back to `Config.DefaultProvider`) — see `cmd/grok/provider.go`'s
+`resolveProviderName` and README.md's "Running it against a different
+provider". `ports.CredentialStore` resolution is per-provider via each
+entry's `APIKeyEnvVar`; an empty `APIKeyEnvVar` uses
+`credentials/env.NoAuth` for providers that need none (some local model
+servers accept unauthenticated requests).
+
+**Still ahead:** a composite `internal/adapters/driven/llm/router` adapter
+— itself a `ports.LLMProvider` wrapping N other `ports.LLMProvider`s with a
+routing strategy (`priority`, `round-robin` first; more later) for
+fallback/load-balancing across *multiple* providers in one turn. Because
+it would satisfy the same port, `chatservice` needs zero changes to go
+from "one provider selected by name" (today) to "a routed pool of them"
+(this). `Config` would grow a `Router {Strategy string; Order []string}`
+section alongside `Providers` for this. OAuth credential adapters
+(matching Rust's `xai-grok-auth` device-code flow) are a later, explicit
+task per provider, behind the same `ports.CredentialStore` port —
+`APIKeyEnvVar` isn't the only way to satisfy it, just the only one built
+so far.
 
 ## Phases & tasks
 
@@ -203,16 +240,16 @@ SDK choice per provider: see "Library & framework choices" → "LLM provider SDK
 - [x] Move `adapters/driven/llm/xai` → `adapters/driven/llm/providers/xai` (namespace only, no behavior change; update `cmd/grok/main.go` import).
 - [x] `providers/openai`: wraps `github.com/openai/openai-go`'s streaming chat completions + tool calling.
 - [x] Retargeted xAI onto `providers/openai.Client` (base URL `https://api.x.ai/v1`) and deleted `providers/xai`'s hand-rolled `net/http`/SSE client — no raw HTTP client remains for any LLM provider. `cmd/grok/main.go`'s provider switch collapsed to a single constructor call as a result.
-- [x] `providers/anthropic`: wraps `github.com/anthropics/anthropic-sdk-go`'s Messages API streaming. Real translation logic, not a copy-paste of the OpenAI-format adapter — Anthropic's system prompt is a top-level request field (not a message), there's no "tool" role (tool results are `tool_result` content blocks inside a user-role message), and an assistant turn's text + tool calls are both content blocks on one message. Auth is `X-Api-Key`, not `Authorization: Bearer`. Wired into `cmd/grok` as `GROK_PROVIDER=anthropic`. 82.9% coverage, same bar as the other providers.
+- [x] `providers/anthropic`: wraps `github.com/anthropics/anthropic-sdk-go`'s Messages API streaming. Real translation logic, not a copy-paste of the OpenAI-format adapter — Anthropic's system prompt is a top-level request field (not a message), there's no "tool" role (tool results are `tool_result` content blocks inside a user-role message), and an assistant turn's text + tool calls are both content blocks on one message. Auth is `X-Api-Key`, not `Authorization: Bearer`. Wired into `cmd/grok` as a `kind: anthropic` config entry (see below). 82.9% coverage, same bar as the other providers.
 - [ ] `providers/gemini`: wraps `github.com/googleapis/go-genai`'s streaming `GenerateContent`.
-- [ ] `providers/ollama`: wraps `github.com/ollama/ollama/api` for local models.
-- [x] `openaicompat` support: no separate package needed — `providers/openai.Client` already takes an arbitrary `BaseURL`, so it directly covers OpenRouter/Groq/vLLM/Ollama/llama.cpp-style servers. A manual-testing selector (`GROK_PROVIDER=openaicompat` + `GROK_BASE_URL`/`GROK_MODEL`/`GROK_API_KEY`, see `cmd/grok/provider.go` and README.md's "Running it against a different provider") exists ahead of the real `llm/router`.
-- [ ] `llm/router`: composite `ports.LLMProvider` with `priority` and `round-robin` strategies to start.
-- [ ] Extend `settings.Config` (`Providers`, `Router`) and the `file` config adapter's YAML shape; keep `settings.Default()` backward compatible with Phase 0's single-provider config.
-- [ ] Extend `CredentialStore` to be provider-keyed; update the `env` adapter.
-- [ ] Update `cmd/grok/main.go` to build the provider set + router from config instead of a single hardcoded `xai.New(...)`; this is also where the Cobra CLI task (see "Library & framework choices" → "CLI") lands.
-- [ ] Tests: `httptest`/SDK-provided test transports per provider's wire format (mirror `llm/xai/client_test.go`'s small `fmt.Sprintf(%q, ...)` fixture-builder pattern — hand-typed SSE JSON is a proven bug source, don't repeat it); router tests covering success, fallback-on-error, and all-providers-failed. TDD per the Definition of Done below: test first, watch it fail, then implement.
-- [ ] Docs: update `ARCHITECTURE.md`'s provider table; this ROADMAP's Phase 1 checklist gets checked off item by item as PRs land.
+- [ ] `providers/ollama`: wraps `github.com/ollama/ollama/api` for local models (native client — as opposed to reaching Ollama's OpenAI-compat mode through `Kind: "openai"`, already possible today via a config entry, see "Multi-provider architecture" above).
+- [x] `openaicompat` (any OpenAI-wire-compatible endpoint — OpenRouter, Groq, vLLM, Ollama, ...): no separate package needed — `providers/openai.Client` already takes an arbitrary `BaseURL`. Purely a config file entry (`kind: openai`, your `baseURL`/`model`/`apiKeyEnvVar`) — see README.md's "Running it against a different provider" for worked examples. Superseded the earlier `GROK_PROVIDER=openaicompat` + `GROK_BASE_URL`/`GROK_MODEL`/`GROK_API_KEY` env-var scheme, which is gone.
+- [ ] `llm/router`: composite `ports.LLMProvider` with `priority` and `round-robin` strategies to start — routes across *multiple* configured providers in one turn (fallback/load-balancing), distinct from today's "select one provider by name" (`Config.Provider`).
+- [x] `settings.Config` redesigned: `Providers []ProviderConfig` (`Name`/`Kind`/`BaseURL`/`Model`/`APIKeyEnvVar`) + `DefaultProvider` + `Config.Provider(name)` lookup, replacing the old single-provider `DefaultModel`/`BaseURL` fields. 100% test coverage.
+- [x] `ports.CredentialStore` resolution is per-provider via each entry's `APIKeyEnvVar`; `credentials/env.NoAuth` added for providers needing none. OAuth device-code adapters (matching Rust's `xai-grok-auth`) are still a later, explicit task per provider, behind the same port.
+- [x] `cmd/grok` rebuilt around the new config: `provider.go`'s `resolveProviderName` is the entire selection surface (`--provider` flag → `GROK_PROVIDER` env var → `Config.DefaultProvider`), `main.go`'s `runInteractive` does `cfg.Provider(name)` then switches on `Kind` to build `openai.New`/`anthropic.New`. This is also where the Cobra CLI task (see "Library & framework choices" → "CLI") landed.
+- [x] Tests: `httptest`/SDK-provided test transports per provider's wire format (mirror `llm/xai/client_test.go`'s small `fmt.Sprintf(%q, ...)` fixture-builder pattern — hand-typed SSE JSON is a proven bug source, don't repeat it); `settings.Config.Provider` tests, `resolveProviderName` tests, `config/file` round-trip test updated to the new struct shape (and switched from `!=` to `reflect.DeepEqual` since `Config` now contains a slice and isn't `comparable` anymore). Router tests (success, fallback-on-error, all-providers-failed) are still ahead, once `llm/router` exists. TDD per the Definition of Done below throughout: test first, watch it fail, then implement.
+- [x] Docs: `ARCHITECTURE.md`'s provider table and `README.md`'s "Running it against a different provider" section rewritten to match; this ROADMAP's Phase 1 checklist gets checked off item by item as PRs land.
 
 ### Phase 2 — Concurrency & performance hardening
 - [ ] `internal/adapters/driven/llm/resilience`: circuit breaker wrapping any `ports.LLMProvider` (CLOSED/OPEN/HALF_OPEN, config-driven threshold + reset timeout, lazy recovery on read — no background timer goroutine needed, matching the lazy-recovery pattern OmniRoute uses).
