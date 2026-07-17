@@ -98,17 +98,63 @@ mage go:run
 On start it loads `$GROK_HOME/config.yaml` (falling back to
 `~/.grok/config.yaml`), or built-in defaults if neither exists.
 
+### Running it against a different provider (OpenAI, or any OpenAI-compatible endpoint)
+
+`cmd/grok` defaults to xAI, but reads `GROK_PROVIDER` to pick a different
+backend for manual testing. This is a stopgap ahead of Phase 1's real
+`llm/router` + multi-provider config (see `docs/ROADMAP.md`) — it selects
+exactly one provider from an env var, it doesn't route across several.
+
+| `GROK_PROVIDER` | Required env vars | What it builds |
+|---|---|---|
+| `xai` (default) | `XAI_API_KEY` | `providers/xai`, base URL from config |
+| `openai` | `OPENAI_API_KEY`, optional `GROK_MODEL` (default `gpt-4o`) | `providers/openai` against `https://api.openai.com/v1` |
+| `openaicompat` | `GROK_BASE_URL`, `GROK_MODEL`, `GROK_API_KEY` | `providers/openai` against **your** base URL — this is how you point it at OpenRouter, Groq, a local Ollama/vLLM server, or anything else that speaks the OpenAI chat-completions wire format. It's the same adapter as `openai` above; only the endpoint differs. |
+
+Example: a local Ollama server (`ollama serve`, OpenAI-compatible mode is
+built in at `/v1`):
+
+```bash
+export GROK_PROVIDER=openaicompat
+export GROK_BASE_URL=http://localhost:11434/v1
+export GROK_MODEL=llama3
+export GROK_API_KEY=ollama   # most local servers ignore the value but still require the header to be present
+mage go:run
+```
+
+Example: OpenRouter:
+
+```bash
+export GROK_PROVIDER=openaicompat
+export GROK_BASE_URL=https://openrouter.ai/api/v1
+export GROK_MODEL=openai/gpt-4o-mini   # or any model OpenRouter serves
+export GROK_API_KEY=sk-or-...
+mage go:run
+```
+
+If you don't have an xAI key and just want to confirm the binary itself
+works, `openaicompat` against a local server needs no paid API key at all.
+
+The selection logic (`resolveProviderChoice` in `cmd/grok/provider.go`) is
+unit tested — `go test ./cmd/grok/... -v` — against fake env vars, so you
+don't need any of these servers running to verify the *logic* is correct;
+you only need one running to actually talk to a model.
+
 ## Layout
 
 ```
 go/
   cmd/grok/                composition root (main.go) — the only place
-                            concrete adapters get wired together
+                            concrete adapters get wired together;
+                            provider.go picks xai/openai/openaicompat from
+                            GROK_PROVIDER (see "Running it" above)
   internal/domain/         chat entities + ports (LLMProvider, Tool,
                             ConfigStore, CredentialStore) — zero external deps
   internal/application/    chatservice: the model/tool-call loop, depends
                             only on domain ports
-  internal/adapters/driven/    xai (LLM client), config/file, credentials/env,
+  internal/adapters/driven/    llm/providers/{xai,openai} (openai also
+                                serves any OpenAI-compatible endpoint),
+                                config/file, credentials/env,
                                 tools/{shellexec,readfile}
   internal/adapters/driving/   tui (Bubble Tea)
   magefile.go, go.yaml     the nava/Mage build definition

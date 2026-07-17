@@ -14,6 +14,7 @@ import (
 
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/config/file"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/credentials/env"
+	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/llm/providers/openai"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/llm/providers/xai"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/tools/readfile"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/tools/shellexec"
@@ -44,14 +45,24 @@ func run() error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	creds := env.New(env.DefaultVarName, os.LookupEnv)
+	choice, err := resolveProviderChoice(os.Getenv, cfg)
+	if err != nil {
+		return fmt.Errorf("resolve provider: %w", err)
+	}
+	creds := env.New(choice.credVar, os.LookupEnv)
 
 	workspaceRoot, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("resolve workspace root: %w", err)
 	}
 
-	llmClient := xai.New(cfg.BaseURL, creds)
+	var llmClient ports.LLMProvider
+	switch choice.name {
+	case "xai":
+		llmClient = xai.New(choice.baseURL, creds)
+	default: // "openai" and "openaicompat" both speak the OpenAI wire format
+		llmClient = openai.New(choice.baseURL, creds)
+	}
 
 	tools := []ports.Tool{
 		shellexec.New(),
@@ -59,7 +70,7 @@ func run() error {
 	}
 
 	svc := chatservice.New(llmClient, tools)
-	session := chat.NewSession("local", cfg.DefaultModel, cfg.SystemPrompt)
+	session := chat.NewSession("local", choice.model, cfg.SystemPrompt)
 
 	return tui.Run(ctx, svc, session)
 }

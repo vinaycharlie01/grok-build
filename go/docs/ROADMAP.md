@@ -117,7 +117,7 @@ never visible above `internal/adapters/driven/llm/providers/*`.
 | Anthropic | `providers/anthropic` | [`github.com/anthropics/anthropic-sdk-go`](https://github.com/anthropics/anthropic-sdk-go) |
 | Google Gemini | `providers/gemini` | [`github.com/googleapis/go-genai`](https://github.com/googleapis/go-genai) |
 | Ollama (local) | `providers/ollama` | [`github.com/ollama/ollama/api`](https://github.com/ollama/ollama/tree/main/api) — native client, not the generic OpenAI-compat path |
-| Other OpenAI-compatible (OpenRouter, Groq, vLLM, ...) | `providers/openaicompat` | `github.com/openai/openai-go` pointed at a configurable `BaseURL` |
+| Other OpenAI-compatible (OpenRouter, Groq, vLLM, Ollama, ...) | *(no separate package — reuses `providers/openai.Client` with a config-supplied `BaseURL`)* | `github.com/openai/openai-go` pointed at a configurable `BaseURL` — see `cmd/grok/provider.go`'s `GROK_PROVIDER=openaicompat` path for the manual-testing version of this today |
 
 ### CLI (Phase 1)
 
@@ -205,7 +205,7 @@ SDK choice per provider: see "Library & framework choices" → "LLM provider SDK
 - [ ] `providers/anthropic`: wraps `github.com/anthropics/anthropic-sdk-go`'s Messages API streaming — different event shape than OpenAI-style (`content_block_delta`, `message_delta`, `tool_use` blocks), real translation logic, not a copy-paste of the xAI parser.
 - [ ] `providers/gemini`: wraps `github.com/googleapis/go-genai`'s streaming `GenerateContent`.
 - [ ] `providers/ollama`: wraps `github.com/ollama/ollama/api` for local models.
-- [ ] `providers/openaicompat`: `github.com/openai/openai-go` pointed at a configurable `BaseURL`, covering OpenRouter/Groq/vLLM/llama.cpp-style servers.
+- [x] `openaicompat` support: no separate package needed — `providers/openai.Client` already takes an arbitrary `BaseURL`, so it directly covers OpenRouter/Groq/vLLM/Ollama/llama.cpp-style servers. A manual-testing selector (`GROK_PROVIDER=openaicompat` + `GROK_BASE_URL`/`GROK_MODEL`/`GROK_API_KEY`, see `cmd/grok/provider.go` and README.md's "Running it against a different provider") exists ahead of the real `llm/router`.
 - [ ] `llm/router`: composite `ports.LLMProvider` with `priority` and `round-robin` strategies to start.
 - [ ] Extend `settings.Config` (`Providers`, `Router`) and the `file` config adapter's YAML shape; keep `settings.Default()` backward compatible with Phase 0's single-provider config.
 - [ ] Extend `CredentialStore` to be provider-keyed; update the `env` adapter.
