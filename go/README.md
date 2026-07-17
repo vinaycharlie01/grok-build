@@ -9,16 +9,25 @@ This directory is a **pure-Go, goroutine-native, multi-provider** rewrite of
 - **Hexagonal architecture** (ports & adapters) to keep the agent/chat
   domain logic independent of any specific model backend, storage, or UI —
   see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+- **Official SDKs, never a hand-rolled HTTP client.** Every LLM provider is
+  a thin `ports.LLMProvider` adapter around that vendor's official Go SDK
+  (or the closest wire-compatible one — see below). There is no
+  hand-written `net/http`/SSE parsing anywhere in this tree.
 - **[nava](https://github.com/nirantaraai/nava)** (a Mage-based build
   toolkit) as the *only* build/test/lint path. There are no `.sh` files
   anywhere in this tree — every command below is a typed Go function.
 
 This is **not** an xAI-only client. `ports.LLMProvider` is provider-agnostic
-by design; xAI's Grok is the first backend behind it, with OpenAI,
-Anthropic, Gemini, and OpenAI-compatible/local backends planned next. See
-[`docs/ROADMAP.md`](docs/ROADMAP.md) for the full phased plan (multi-provider
-support, goroutine/concurrency hardening, tool parity, MCP/ACP, sandboxing,
-and more) with a task checklist per phase.
+by design. Built today: **xAI, OpenAI, and any OpenAI-compatible endpoint**
+(via [`github.com/openai/openai-go`](https://github.com/openai/openai-go) —
+xAI has no SDK of its own, but its API is OpenAI-wire-compatible, so it
+needs none) and **Anthropic** (via
+[`github.com/anthropics/anthropic-sdk-go`](https://github.com/anthropics/anthropic-sdk-go),
+a genuinely different wire format, not a base-URL variant of the OpenAI
+client). Gemini and a native Ollama client are next. See
+[`docs/ROADMAP.md`](docs/ROADMAP.md) for the full phased plan (remaining
+providers, goroutine/concurrency hardening, tool parity, MCP/ACP,
+sandboxing, and more) with a task checklist per phase.
 
 **`crates/` (the Rust source) is kept exactly as-is and is never modified by
 this port** — it's the reference implementation to check behavior against
@@ -29,7 +38,10 @@ policy" in the roadmap.
 
 - Go 1.25+
 - [Mage](https://magefile.org/): `go install github.com/magefile/mage@latest`
-- An xAI API key exported as `XAI_API_KEY` to actually talk to a model.
+- An API key for whichever provider you want to talk to — `XAI_API_KEY` by
+  default, or see "Running it against a different provider" below for
+  OpenAI/Anthropic/OpenAI-compatible (including local servers that need no
+  paid key at all).
 
 ## Build & test — always via `mage`, never a shell script
 
@@ -74,14 +86,14 @@ go test -race -cover ./internal/application/chatservice/...
 ```
 
 Every adapter's tests are self-contained — `httptest.Server` fakes for the
-`llm/providers/openai` adapter (it never makes a real network call in
-tests), `t.TempDir()` for filesystem adapters — so none of this needs a
-live API key or network access. Testing against a *real* API is a separate
-thing from the unit tests: see "Running it against a different provider"
-below for that — it works today (xAI, OpenAI, and any OpenAI-compatible
-endpoint are all wired into `cmd/grok/main.go` already), it just needs a
-real key and network access, which the unit tests deliberately avoid
-needing.
+`llm/providers/{openai,anthropic}` adapters (neither ever makes a real
+network call in tests), `t.TempDir()` for filesystem adapters — so none of
+this needs a live API key or network access. Testing against a *real* API
+is a separate thing from the unit tests: see "Running it against a
+different provider" below for that — it works today (xAI, OpenAI,
+Anthropic, and any OpenAI-compatible endpoint are all wired into
+`cmd/grok/main.go` already), it just needs a real key and network access,
+which the unit tests deliberately avoid needing.
 
 **Every unit test in this repo is TDD, not test-added-after**: write the
 test against the behavior you're about to add, watch it fail for the right
