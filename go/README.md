@@ -126,15 +126,18 @@ real network, filesystem, or database — `portsfakes.FakeLLMProvider`,
 `.FakeTool`, `.FakeSessionStore`, etc. Each supports the usual counterfeiter
 API: `.StreamChatReturns(ch, err)` for a fixed return, `.ExecuteCalls(fn)`
 for dynamic behavior, `.SaveCallCount()`/`.SaveArgsForCall(i)` to assert on
-what was called and with what. `internal/adapters/driving/tui/model_test.go`
-and `cmd/grok/integration_test.go` are the two worked examples in this tree.
-
-Not every test needs one: `internal/application/chatservice/service_test.go`
-keeps its own small hand-rolled `scriptedLLM`/`fakeTool` because it needs
-call-indexed scripted responses across a multi-hop tool-call loop, which is
-more naturally expressed as a plain Go closure than through counterfeiter's
-per-call stubbing API — use whichever is less ceremony for the test at hand,
-not counterfeiter unconditionally everywhere.
+what was called and with what, `.StreamChatCallCount()` for call-indexed
+scripting (the fake tracks its own call count before the stub runs, so a
+test can branch on "which call is this" without a hand-rolled counter/mutex
+— see `internal/application/chatservice/service_test.go`'s `newScriptedLLM`
+helper, built for exactly that: a multi-hop tool-call loop where each hop
+needs a different scripted response). No hand-rolled port fake remains
+anywhere in this tree — every test that needs one uses a generated fake,
+possibly wrapped in a small same-package constructor helper
+(`newScriptedLLM`, `newFakeTool`) when a test file wants a shorter call
+site than the raw counterfeiter API. `internal/adapters/driving/tui/model_test.go`,
+`internal/application/chatservice/service_test.go`, and
+`cmd/grok/integration_test.go` are the worked examples in this tree.
 
 ## Running it
 

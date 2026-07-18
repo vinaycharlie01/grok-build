@@ -275,7 +275,7 @@ Real Go code exists and does part of the job; a meaningful gap remains
 | `xai-grok-paths` | `internal/adapters/driven/config/file.DefaultPath()` | One path (the config file), not a general typed-path library |
 | `xai-grok-sampler` | `internal/adapters/driven/llm/providers/{openai,anthropic}` | SDK-backed streaming exists; no retry-with-backoff, no actor concurrency model |
 | `xai-grok-shell` | `cmd/grok` | Covers a sliver: no managed_config, no mcp_doctor, no active_sessions crash tracking, no leader/relay/remote modes |
-| `xai-grok-test-support` | Go's own `httptest.Server`-based SDK test transports, `internal/domain/ports/portsfakes` (counterfeiter-generated mocks), a small hand-rolled `scriptedLLM`/`fakeTool` in `chatservice` where call-indexed scripting suits a closure better than counterfeiter's stubbing API | Equivalent purpose, not a literal port — no ACP stdio test client, no headless runner |
+| `xai-grok-test-support` | Go's own `httptest.Server`-based SDK test transports, `internal/domain/ports/portsfakes` (counterfeiter-generated mocks, used everywhere a port needs a fake — no hand-rolled port fake remains anywhere in this tree) | Equivalent purpose, not a literal port — no ACP stdio test client, no headless runner |
 | `xai-grok-tools` | `internal/adapters/driven/tools/{shellexec,readfile,writefile,search}` | 4 of many tools; no `editfile`, no `git` tool, no tool registry (Phase 3) |
 | `xai-grok-workspace` | `cmd/grok/main.go`'s `os.Getwd()`-based `workspaceRoot` | No VCS/discovery/remote-execution surface, just a root path |
 | `xai-tool-runtime` | `internal/domain/ports.Tool`, `chatservice.executeToolsConcurrently` | No formal error taxonomy, no search index, no dispatch trait hierarchy |
@@ -481,14 +481,13 @@ A task is done only when it:
 
 1. Builds via `mage go:build` and passes `mage go:test` / `mage go:race`.
 2. Was developed TDD: the test(s) at the appropriate layer (counterfeiter-
-   generated fakes from `internal/domain/ports/portsfakes` for a port
-   dependency, `httptest`/`t.TempDir()` for adapters, a small hand-rolled
-   fake only when call-indexed/dynamic scripting makes that genuinely
-   simpler than counterfeiter's stubbing API — see README.md's "Mocking
-   port interfaces") were written first, confirmed to fail for the right
-   reason, then made to pass — not written afterward to describe code
-   that already works. Commit history / PR description should make the
-   red→green step visible (e.g. a commit that adds only the failing
+   generated fakes from `internal/domain/ports/portsfakes` for any port
+   dependency — no hand-rolled port fake, ever; `httptest`/`t.TempDir()`
+   for adapters — see README.md's "Mocking port interfaces") were
+   written first, confirmed to fail for the right reason, then made to
+   pass — not written afterward to describe code that already works.
+   Commit history / PR description should make the red→green step visible
+   (e.g. a commit that adds only the failing
    test, or the PR notes the failure output before the fix).
 3. Has no goroutine that can outlive its context — verified, not assumed.
 4. Updates `ARCHITECTURE.md`'s provider/tool table if it adds a new
