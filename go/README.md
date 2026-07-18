@@ -426,8 +426,9 @@ go/
 ```
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how this maps onto
-the ~65-crate Rust closure under `../crates/codegen/` and what's ported so
-far vs. what's still Rust-only, and [`docs/ROADMAP.md`](docs/ROADMAP.md) for
-the phased plan (multi-provider support, concurrency/performance hardening,
+the 75-crate Rust closure under `../crates/` and what's ported so far vs.
+what's still Rust-only, and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the
+phased plan (multi-provider support, concurrency/performance hardening,
 tool parity, MCP/ACP, sandboxing, telemetry, distribution) that gets it
-there.
+there — including a full crate-by-crate port-status table for all 75
+crates ("Full Rust crate inventory").

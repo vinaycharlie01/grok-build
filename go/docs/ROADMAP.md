@@ -227,6 +227,142 @@ task per provider, behind the same `ports.CredentialStore` port —
 `APIKeyEnvVar` isn't the only way to satisfy it, just the only one built
 so far.
 
+## Full Rust crate inventory — port status (75 crates)
+
+This is the complete list of every crate in `../crates/` (`codegen/`, `common/`,
+`build/` — verified via each crate's `Cargo.toml` `name`/`description` field, not
+guessed from directory names), cross-referenced against what exists in this Go
+tree today. It's the ground truth the phase checklists below implement piece by
+piece — when a phase task references a Rust crate, this table is where that
+mapping is decided and kept current. Update it in the same PR that ports (or
+supersedes, or explicitly decides not to port) a crate.
+
+**Summary**: 6 ported/superseded, 17 partially ported, 5 have no Go port planned
+(Rust-build/test-tooling with no runtime equivalent needed), 47 not started.
+
+### ✅ Ported or superseded (6)
+
+A "superseded" entry means the Rust crate's *purpose* is covered by a
+deliberate different-library choice in Go, not a missing gap — e.g. Bubble Tea
+entirely replaces ratatui, so there's no separate "port xai-ratatui-inline"
+task.
+
+| Crate | Go equivalent | Note |
+|---|---|---|
+| `xai-grok-http` | `internal/adapters/driven/llm/providers/{openai,anthropic}` | Superseded, not ported: Go uses the official `openai-go`/`anthropic-sdk-go` SDKs exclusively — no hand-rolled HTTP/reqwest client exists anywhere in this tree (a repeated hard rule this port follows; see "Library & framework choices" above) |
+| `xai-grok-models` | `internal/domain/settings.ModelInfo`/`APIBackend`/`ProviderConfig.Models` | Ported — the `xai` provider's `grok-build` catalog entry is copied verbatim from `default_models.json`, not fabricated |
+| `xai-grok-sampling-types` | `internal/domain/settings.ModelInfo`/`APIBackend` | Ported — `APIBackend` mirrors `ApiBackend` (chat_completions/responses/messages) field-for-field |
+| `xai-grok-version` | `cmd/grok/version.go` | Ported — `Version`/`Commit`/`BuildDate` vars, ldflags-injected by nava's `versionPkg` build option |
+| `xai-ratatui-inline` | `internal/adapters/driving/tui` (Bubbles' `viewport`) | Superseded by the Bubble Tea/Bubbles framework choice, not ported |
+| `xai-ratatui-textarea` | `internal/adapters/driving/tui` (Bubbles' `textinput`) | Superseded, same reason |
+
+### 🟡 Partially ported (17)
+
+Real Go code exists and does part of the job; a meaningful gap remains
+(documented per-row, not just "more to do").
+
+| Crate | Go equivalent | Gap |
+|---|---|---|
+| `xai-chat-state` | `internal/domain/chat`, `internal/application/chatservice`, `internal/adapters/driven/sessionstore/mongo` | No actor-based concurrency model, no fork/rewind snapshotting; persistence is now real (opt-in MongoDB) but single-session only |
+| `xai-grok-agent` | `internal/application/chatservice` | No agent-definition-file parsing, no persona/system-prompt assembly beyond one static string |
+| `xai-grok-auth` | `internal/domain/ports.CredentialStore`, `internal/adapters/driven/credentials/env` | API-key-only; no OAuth device-code flow |
+| `xai-grok-config` | `internal/adapters/driven/config/file`, `internal/domain/settings.Config` | One flat YAML file; no managed-config layering (requirements > user > managed), no TOML |
+| `xai-grok-config-types` | `internal/domain/settings.ProviderConfig`/`ModelInfo`/`SessionStoreConfig` | Narrower value-type set than the Rust crate's full leaf-type catalog |
+| `xai-grok-env` | `internal/domain/settings.Default()` | Three hardcoded provider presets (xai/openai/anthropic) vs. a general backend-preset system |
+| `xai-grok-pager` | `internal/adapters/driving/tui` | Single scrollback + input line; no modals/slash-commands/scrollback search/themes |
+| `xai-grok-pager-bin` | `cmd/grok` | Covers TUI launch + provider/model resolution only |
+| `xai-grok-pager-render` | `internal/adapters/driving/tui` (lipgloss styles) | No syntax highlighting, no glyph fallback table |
+| `xai-grok-paths` | `internal/adapters/driven/config/file.DefaultPath()` | One path (the config file), not a general typed-path library |
+| `xai-grok-sampler` | `internal/adapters/driven/llm/providers/{openai,anthropic}` | SDK-backed streaming exists; no retry-with-backoff, no actor concurrency model |
+| `xai-grok-shell` | `cmd/grok` | Covers a sliver: no managed_config, no mcp_doctor, no active_sessions crash tracking, no leader/relay/remote modes |
+| `xai-grok-test-support` | Go's own `httptest.Server`-based SDK test transports, `scriptedLLM`/fake-store patterns | Equivalent purpose, not a literal port — no ACP stdio test client, no headless runner |
+| `xai-grok-tools` | `internal/adapters/driven/tools/{shellexec,readfile,writefile,search}` | 4 of many tools; no `editfile`, no `git` tool, no tool registry (Phase 3) |
+| `xai-grok-workspace` | `cmd/grok/main.go`'s `os.Getwd()`-based `workspaceRoot` | No VCS/discovery/remote-execution surface, just a root path |
+| `xai-tool-runtime` | `internal/domain/ports.Tool`, `chatservice.executeToolsConcurrently` | No formal error taxonomy, no search index, no dispatch trait hierarchy |
+| `xai-tool-types` | `internal/domain/chat.ToolCall`/`ToolResult`, `internal/domain/ports.ToolSpec` | Narrower type set |
+
+### ⬜ Not started (47)
+
+Grouped by the ROADMAP phase (below) that owns them, where one exists. Crates
+with no assigned phase yet are flagged — they're real gaps in *this document*,
+not just in the Go tree, and should get a phase (or an explicit "won't port"
+decision) rather than sit here indefinitely.
+
+**Phase 2 — Concurrency & performance hardening**
+- `xai-circuit-breaker` — shared HTTP circuit breaker (`internal/adapters/driven/llm/resilience`, already on Phase 2's list)
+
+**Phase 3 — Tool ecosystem parity**
+- `xai-grok-tools-api` — protobuf `GrokToolsService`; Go's `ports.Tool` is in-process only, not gRPC
+- `xai-hunk-tracker` — hunk/diff tracking with attribution, blocks `tools/editfile`
+- `xai-gix-status` — git status helpers, blocks the `tools/git` task
+- `xai-tty-utils` — TTY-safety process-spawning; relevant hardening for `tools/shellexec`, not yet applied
+
+**Phase 4 — Session, memory & checkpoints**
+- `xai-prompt-queue` — multi-turn interleaving wire types
+- `xai-grok-memory` — cross-session knowledge persistence (explicit stretch goal already)
+- `xai-fast-worktree` — CoW git worktree cloning, for checkpoint snapshotting
+- `xai-grok-compaction` — context-compaction engine (consumes `ModelInfo.ContextWindow`, which exists but nothing reads yet)
+- `xai-token-estimation` — token-estimation primitives, needed once compaction is real
+- `xai-sqlite-journal` — WAL/journal-mode selection — moot unless a SQLite adapter is added; MongoDB was the session-store choice this round, so this may never be needed
+
+**Phase 5 — MCP**
+- `xai-grok-mcp` — MCP integration, credential store, OAuth flow orchestrator
+
+**Phase 9 — TUI**
+- `xai-grok-markdown` — streaming markdown renderer (Glamour is the planned Go library)
+- `xai-grok-markdown-core` — headless markdown analysis
+- `xai-grok-mermaid` — Mermaid diagram → PNG rendering
+- `xai-grok-pager-minimal` — `--minimal` scrollback-native render mode
+- `xai-grok-pager-pty-harness` — PTY e2e/benchmark harness (Go's TUI tests instead simulate the Bubble Tea event loop synchronously — see `model_test.go`)
+
+**Phase 10 — Observability & telemetry**
+- `xai-grok-telemetry` — product events + Mixpanel + Sentry
+- `xai-mixpanel` — Mixpanel HTTP client
+- `xai-tracing` — tracing/HTTP client instrumentation helpers
+- `xai-grok-secrets` — regex sanitizer for outbound telemetry scrubbing (moot until telemetry exists)
+- `xai-file-utils` — per-turn local event tracking (despite the name, this is telemetry-adjacent, not general file utilities)
+- `xai-crash-handler` — cross-platform crash handler + startup crash detection
+- `xai-system-power` — sleep/wake (suspend) notifications, to defer work across a suspend boundary
+
+**No phase assigned yet — flagged, not silently dropped:**
+- `xai-acp-lib` — ACP (Agent Client Protocol) channel/gateway/messaging. ARCHITECTURE.md's "not started" list already names this; no ROADMAP phase owns it yet
+- `xai-hooks-plugins-types` — hooks/plugins ACP extension DTOs (wire format)
+- `xai-grok-hooks` — runtime hook system: file-based discovery, command execution, policy enforcement
+- `xai-grok-plugin-marketplace` — plugin marketplace browse/index
+- `xai-grok-subagent-resolution` — subagent persona/role/spawn-override resolution
+- `xai-agent-lifecycle` — host-agnostic agent lifecycle hooks
+- `xai-grok-voice` — voice dictation (streaming STT)
+- `xai-codebase-graph` — tree-sitter-based code graph generation
+- `xai-grok-sandbox` — OS-level sandboxing (Landlock/Seatbelt via `nono`)
+- `xai-grok-update` — self-update + minimum-version enforcement
+- `xai-grok-announcements` — announcement types, persistence, formatting
+- `xai-fsnotify` — filesystem event source (single causal stream of semantic events)
+- `xai-interjection-core` — mid-turn interjection buffer for client/server agent loops
+- `xai-grok-shell-base` — env presets, CPU profiling, process/filesystem util foundation
+- `xai-grok-shell-session-support` — managed MCP credential/catalog caching, file-access tracking
+- `xai-grok-workspace-client` — typed client for hub-proxied `workspace.*` RPCs
+- `xai-grok-workspace-types` — wire types for the workspace API
+- `xai-computer-hub-core` — transport/ToolRegistry/resolver abstractions for the xAI Computer Hub
+- `xai-computer-hub-mcp-adapter` — bridges MCP servers into the Computer Hub as native tools
+- `xai-computer-hub-sdk` — Computer Hub SDK: connection pool, reconnect, tool harness/runtime
+- `xai-tool-protocol` — wire-protocol types for the Computer Hub
+- `ptyctl` — headless PTY controller (built on `alacritty_terminal`)
+- `ptyctl-cli` — CLI for `ptyctl`
+
+### No Go port planned (5)
+
+Rust-specific build/test tooling with no runtime behavior to port — listed
+here so the 75-crate count is fully accounted for, not because anything is
+missing.
+
+| Crate | Why no port |
+|---|---|
+| `xai-proto-build` | Protobuf build-time codegen; Go would use `protoc-gen-go` directly if/when a gRPC tool runtime lands (Phase 3's `tools.Registry`/`xai-grok-tools-api` gap above), not a crate to port |
+| `xai-grok-markdown-fuzz` | Fuzz-testing harness for `xai-grok-markdown`; Go's testing approach for that (once it exists) would use Go's native fuzzing (`testing.F`), not a ported crate |
+| `xai-test-utils` | Hermetic git/runfiles test helpers; Go's `t.TempDir()`-based patterns (see every existing adapter test) serve the same role |
+| `xai-tracing-macros` | Rust proc-macros for timestamped logging; Go has no macro system — structured logging via a normal package (once Phase 10 lands) covers this |
+| `xai-grok-shared` | Grab-bag shared utilities; no single Go equivalent — covered ad hoc by the standard library across the tree rather than one ported package |
+
 ## Phases & tasks
 
 ### Phase 0 — Foundation ✅ done

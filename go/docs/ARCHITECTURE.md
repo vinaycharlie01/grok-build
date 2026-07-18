@@ -8,7 +8,10 @@
 
 ## Why hexagonal
 
-The Rust tree is ~65 crates deep (`crates/codegen/xai-grok-*`) covering the
+The Rust tree is 75 crates deep (`crates/codegen/`, `crates/common/`,
+`crates/build/` — the exact count, verified via each crate's `Cargo.toml`;
+see `ROADMAP.md`'s "Full Rust crate inventory" for the crate-by-crate port
+status) covering the
 TUI, agent runtime, tool execution, workspace/VCS, sandboxing, MCP, ACP,
 hooks/plugins, memory, telemetry, and more. Porting that in one pass isn't
 realistic or honest work. Hexagonal architecture (ports & adapters) is what
