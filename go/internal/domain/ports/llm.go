@@ -28,6 +28,8 @@ type StreamEvent struct {
 	Err      error // set on EventError
 }
 
+//go:generate go run github.com/maxbrunsfeld/counterfeiter/v6 -o portsfakes/fake_llm_provider.go --fake-name FakeLLMProvider . LLMProvider
+
 // LLMProvider is the driven port through which the application layer talks
 // to a model backend (xAI's Grok API, or any future OpenAI-compatible
 // provider). Adapters implement this; the application layer never imports

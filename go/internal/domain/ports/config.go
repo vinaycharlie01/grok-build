@@ -2,11 +2,15 @@ package ports
 
 import "github.com/vinaycharlie01/grok-build/go/internal/domain/settings"
 
+//go:generate go run github.com/maxbrunsfeld/counterfeiter/v6 -o portsfakes/fake_config_store.go --fake-name FakeConfigStore . ConfigStore
+
 // ConfigStore is the driven port for loading and persisting user settings.
 type ConfigStore interface {
 	Load() (settings.Config, error)
 	Save(settings.Config) error
 }
+
+//go:generate go run github.com/maxbrunsfeld/counterfeiter/v6 -o portsfakes/fake_credential_store.go --fake-name FakeCredentialStore . CredentialStore
 
 // CredentialStore is the driven port for retrieving the API credential used
 // to authenticate against the model provider. The Rust auth crate supports

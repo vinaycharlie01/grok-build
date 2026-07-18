@@ -52,10 +52,13 @@ mage go:build          # builds bin/grok
 mage go:run             # builds and launches the TUI
 mage go:test              # go test ./...
 mage go:race                # go test -race ./...
+mage go:integration           # tests/integration/... (needs Docker — see below)
 mage go:coverage              # go test -cover ./..., writes coverage.out
 mage go:vet                     # go vet ./...
 mage go:lint                      # golangci-lint run ./...
 mage go:format                      # gofmt ./...
+mage go:generate                      # go generate ./... (regenerates counterfeiter fakes)
+mage go:generateCheck                   # regenerate + fail on any uncommitted diff — CI's drift gate
 ```
 
 Every target's actual flags (packages, build output path, ldflags, ...) live
@@ -100,6 +103,38 @@ test against the behavior you're about to add, watch it fail for the right
 reason, then write the minimum code to turn it green. See "Definition of
 done" in [`docs/ROADMAP.md`](docs/ROADMAP.md) — this is a hard requirement
 for every task in the roadmap, not a suggestion.
+
+### Mocking port interfaces (counterfeiter)
+
+Every interface in `internal/domain/ports` (`LLMProvider`, `Tool`,
+`ConfigStore`, `CredentialStore`, `SessionStore`) has a `//go:generate`
+directive generating a fake via
+[counterfeiter](https://github.com/maxbrunsfeld/counterfeiter) into
+`internal/domain/ports/portsfakes/` — registered as a `go.mod` tool
+dependency (`go get -tool`, Go 1.24+'s native tool tracking), not a
+floating "install this yourself" step:
+
+```bash
+mage go:generate        # regenerate every fake from its interface
+mage go:generateCheck   # regenerate, then fail if that leaves anything
+                         # uncommitted — catches a fake that drifted from
+                         # its interface, or was never committed at all
+```
+
+Use a fake wherever a test needs to stand in for a port without touching a
+real network, filesystem, or database — `portsfakes.FakeLLMProvider`,
+`.FakeTool`, `.FakeSessionStore`, etc. Each supports the usual counterfeiter
+API: `.StreamChatReturns(ch, err)` for a fixed return, `.ExecuteCalls(fn)`
+for dynamic behavior, `.SaveCallCount()`/`.SaveArgsForCall(i)` to assert on
+what was called and with what. `internal/adapters/driving/tui/model_test.go`
+and `cmd/grok/integration_test.go` are the two worked examples in this tree.
+
+Not every test needs one: `internal/application/chatservice/service_test.go`
+keeps its own small hand-rolled `scriptedLLM`/`fakeTool` because it needs
+call-indexed scripted responses across a multi-hop tool-call loop, which is
+more naturally expressed as a plain Go closure than through counterfeiter's
+per-call stubbing API — use whichever is less ceremony for the test at hand,
+not counterfeiter unconditionally everywhere.
 
 ## Running it
 
