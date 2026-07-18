@@ -19,7 +19,23 @@ import (
 // ports/llm.go's //go:generate directive) stubbed to replay a fixed event
 // list, ignoring the session/tools passed to it. Replaces this package's
 // former hand-rolled scriptedLLM fake with the generated one.
-func newTestModel(events ...ports.StreamEvent) Model {
+//
+// Uses a cancellable context, cancelled via t.Cleanup, rather than
+// context.Background(): most tests here call handleStreamEvent/Update
+// directly instead of running the real Bubble Tea loop to completion, so
+// the chatservice.Send goroutine a submit() call starts is often left
+// with events still unread on its channel once the test returns. That
+// goroutine's own emit/sendEvent already selects on ctx.Done() (see
+// chatservice's goroutine-leak-safe streaming pattern) specifically to
+// unblock in exactly this situation — but only if the context passed to
+// New actually gets cancelled. Discovered via go.uber.org/goleak's
+// TestMain check (main_test.go) flagging leaked goroutines from
+// TestSubmitAppendsUserMessageAndSetsWaiting and
+// TestSequentialUpdatesAcrossValueCopiesDoNotPanic, both of which start a
+// real Send() and don't fully drain it.
+func newTestModel(t *testing.T, events ...ports.StreamEvent) Model {
+	t.Helper()
+
 	ch := make(chan ports.StreamEvent, len(events))
 	for _, e := range events {
 		ch <- e
@@ -31,23 +47,26 @@ func newTestModel(events ...ports.StreamEvent) Model {
 
 	svc := chatservice.New(llm, nil)
 	session := chat.NewSession("s1", "grok-4", "")
-	return New(context.Background(), svc, session)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	return New(ctx, svc, session)
 }
 
 func TestInitReturnsBlinkCmd(t *testing.T) {
-	if newTestModel().Init() == nil {
+	if newTestModel(t).Init() == nil {
 		t.Fatal("Init() = nil, want a non-nil blink cmd")
 	}
 }
 
 func TestViewBeforeReady(t *testing.T) {
-	if got := newTestModel().View(); got != "initializing…" {
+	if got := newTestModel(t).View(); got != "initializing…" {
 		t.Fatalf("View() = %q, want the pre-ready placeholder", got)
 	}
 }
 
 func TestWindowSizeMsgMarksReady(t *testing.T) {
-	m := newTestModel()
+	m := newTestModel(t)
 
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	mm := updated.(Model)
@@ -66,7 +85,7 @@ func TestWindowSizeMsgMarksReady(t *testing.T) {
 
 func TestCtrlCAndEscQuit(t *testing.T) {
 	for _, key := range []tea.KeyType{tea.KeyCtrlC, tea.KeyEsc} {
-		m := newTestModel()
+		m := newTestModel(t)
 		_, cmd := m.Update(tea.KeyMsg{Type: key})
 		if cmd == nil {
 			t.Fatalf("key %v: want a non-nil quit cmd", key)
@@ -78,7 +97,7 @@ func TestCtrlCAndEscQuit(t *testing.T) {
 }
 
 func TestSubmitAppendsUserMessageAndSetsWaiting(t *testing.T) {
-	m := newTestModel(ports.StreamEvent{Type: ports.EventDone})
+	m := newTestModel(t, ports.StreamEvent{Type: ports.EventDone})
 	m.input.SetValue("hello there")
 
 	updated, cmd := m.submit()
@@ -99,7 +118,7 @@ func TestSubmitAppendsUserMessageAndSetsWaiting(t *testing.T) {
 }
 
 func TestEnterIsIgnoredWhileWaitingOrEmpty(t *testing.T) {
-	m := newTestModel()
+	m := newTestModel(t)
 	m.waiting = true
 	m.input.SetValue("should not send")
 
@@ -117,7 +136,7 @@ func TestEnterIsIgnoredWhileWaitingOrEmpty(t *testing.T) {
 }
 
 func TestHandleStreamEventTextDelta(t *testing.T) {
-	m := newTestModel()
+	m := newTestModel(t)
 	updated, cmd := m.handleStreamEvent(ports.StreamEvent{Type: ports.EventTextDelta, Text: "hello"})
 	mm := updated.(Model)
 
@@ -133,7 +152,7 @@ func TestHandleStreamEventTextDelta(t *testing.T) {
 }
 
 func TestHandleStreamEventToolCall(t *testing.T) {
-	m := newTestModel()
+	m := newTestModel(t)
 	tc := chat.ToolCall{ID: "1", Name: "shell_exec", Arguments: `{"command":"ls"}`}
 
 	updated, _ := m.handleStreamEvent(ports.StreamEvent{Type: ports.EventToolCall, ToolCall: tc})
@@ -145,7 +164,7 @@ func TestHandleStreamEventToolCall(t *testing.T) {
 }
 
 func TestHandleStreamEventDoneResetsStreamingBuffer(t *testing.T) {
-	m := newTestModel()
+	m := newTestModel(t)
 	m.streaming.WriteString("partial")
 
 	updated, _ := m.handleStreamEvent(ports.StreamEvent{Type: ports.EventDone})
@@ -157,7 +176,7 @@ func TestHandleStreamEventDoneResetsStreamingBuffer(t *testing.T) {
 }
 
 func TestHandleStreamEventErrorRecordsAndRenders(t *testing.T) {
-	m := newTestModel()
+	m := newTestModel(t)
 	wantErr := errors.New("boom")
 
 	updated, _ := m.handleStreamEvent(ports.StreamEvent{Type: ports.EventError, Err: wantErr})
@@ -172,7 +191,7 @@ func TestHandleStreamEventErrorRecordsAndRenders(t *testing.T) {
 }
 
 func TestStreamClosedMsgClearsWaiting(t *testing.T) {
-	m := newTestModel()
+	m := newTestModel(t)
 	m.waiting = true
 
 	updated, cmd := m.Update(streamClosedMsg{})
@@ -218,7 +237,7 @@ func TestWaitForEventTranslatesChannel(t *testing.T) {
 // bubbletea.Program.Run's real event loop does, specifically to catch
 // that class of bug.
 func TestSequentialUpdatesAcrossValueCopiesDoNotPanic(t *testing.T) {
-	var tm tea.Model = newTestModel()
+	var tm tea.Model = newTestModel(t)
 
 	step := func(msg tea.Msg) {
 		t.Helper()

@@ -104,6 +104,17 @@ reason, then write the minimum code to turn it green. See "Definition of
 done" in [`docs/ROADMAP.md`](docs/ROADMAP.md) — this is a hard requirement
 for every task in the roadmap, not a suggestion.
 
+Every test package also runs [`go.uber.org/goleak`](https://github.com/uber-go/goleak)
+(`TestMain` in that package's `main_test.go`), failing the run if any test
+leaves a goroutine running after it finishes — automated, not just
+manually reviewed. This isn't theoretical: adding it caught 3 real leaks
+(a test-only `context.Background()` that should have been cancellable,
+two tests that discarded a `StreamChat` event channel instead of draining
+it) — see ROADMAP.md's Phase 2 checklist for the specifics. When adding a
+new test package, copy an existing `main_test.go` (they're all identical:
+`func TestMain(m *testing.M) { goleak.VerifyTestMain(m) }` in that
+package's test-file package name) rather than skipping it.
+
 ### Mocking port interfaces (counterfeiter)
 
 Every interface in `internal/domain/ports` (`LLMProvider`, `Tool`,
