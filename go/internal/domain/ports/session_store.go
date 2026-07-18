@@ -6,6 +6,8 @@ import (
 	"github.com/vinaycharlie01/grok-build/go/internal/domain/chat"
 )
 
+//go:generate go run github.com/maxbrunsfeld/counterfeiter/v6 -o portsfakes/fake_session_store.go --fake-name FakeSessionStore . SessionStore
+
 // SessionStore is the driven port for persisting and retrieving chat
 // sessions across process restarts — the Go analogue of the Rust
 // reference's xai-chat-state persistence surface (see ROADMAP.md's Phase

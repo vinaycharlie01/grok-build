@@ -16,8 +16,6 @@ import (
 
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/config/file"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/credentials/env"
-	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/llm/providers/anthropic"
-	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/llm/providers/openai"
 	sessionmongo "github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/sessionstore/mongo"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/tools/readfile"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/tools/search"
@@ -80,20 +78,7 @@ func runInteractive(providerFlag, modelFlag string) error {
 		return fmt.Errorf("resolve workspace root: %w", err)
 	}
 
-	// Kind names a wire-format family, not a vendor: "openai" covers xAI,
-	// OpenAI itself, and any OpenAI-compatible endpoint (OpenRouter, Groq,
-	// a local Ollama/vLLM server, ...) via the one SDK-backed
-	// openai.Client — see ROADMAP.md's "Library & framework choices" for
-	// why there's no hand-rolled HTTP client for any provider in this
-	// tree. "anthropic" is a genuinely different wire format, so it gets
-	// its own SDK-backed client rather than being forced through the OpenAI one.
-	var llmClient ports.LLMProvider
-	switch chosen.Kind {
-	case "anthropic":
-		llmClient = anthropic.New(chosen.BaseURL, creds)
-	default:
-		llmClient = openai.New(chosen.BaseURL, creds)
-	}
+	llmClient := buildLLMClient(chosen.Kind, chosen.BaseURL, creds)
 
 	tools := []ports.Tool{
 		shellexec.New(),

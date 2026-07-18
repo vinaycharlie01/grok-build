@@ -2,6 +2,8 @@ package ports
 
 import "context"
 
+//go:generate go run github.com/maxbrunsfeld/counterfeiter/v6 -o portsfakes/fake_tool.go --fake-name FakeTool . Tool
+
 // Tool is the driven port for a single agent capability (shell execution,
 // file read/edit, search, ...). It mirrors the ExecuteTool/ListTools shape
 // of the Rust xai-grok-tools-api gRPC service, simplified to an in-process
