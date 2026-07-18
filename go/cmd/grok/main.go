@@ -13,9 +13,11 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/config/file"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/credentials/env"
+	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/llm/resilience"
 	sessionmongo "github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/sessionstore/mongo"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/tools/readfile"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/tools/search"
@@ -33,6 +35,19 @@ import (
 // sessionStore: in their config file resumes the same conversation across
 // restarts rather than starting fresh each time.
 const localSessionID = "local"
+
+// Circuit breaker defaults for the selected LLM provider. Always on
+// (unlike SessionStore, this changes nothing observable while the
+// provider is healthy — CLOSED just passes every call through), matching
+// ROADMAP.md's Phase 2 "resilience wrapping any ports.LLMProvider" task.
+// These numbers follow OmniRoute's API-key-provider tier (see that
+// project's CLAUDE.md "Resilience Runtime State" section) as a
+// reasonable default for a cloud LLM API; not yet exposed as config —
+// see ROADMAP.md if a provider needs its own threshold/timeout later.
+const (
+	circuitBreakerThreshold    = 5
+	circuitBreakerResetTimeout = 30 * time.Second
+)
 
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
@@ -78,7 +93,7 @@ func runInteractive(providerFlag, modelFlag string) error {
 		return fmt.Errorf("resolve workspace root: %w", err)
 	}
 
-	llmClient := buildLLMClient(chosen.Kind, chosen.BaseURL, creds)
+	llmClient := resilience.Wrap(buildLLMClient(chosen.Kind, chosen.BaseURL, creds), circuitBreakerThreshold, circuitBreakerResetTimeout)
 
 	tools := []ports.Tool{
 		shellexec.New(),

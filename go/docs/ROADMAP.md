@@ -237,10 +237,10 @@ piece — when a phase task references a Rust crate, this table is where that
 mapping is decided and kept current. Update it in the same PR that ports (or
 supersedes, or explicitly decides not to port) a crate.
 
-**Summary**: 6 ported/superseded, 17 partially ported, 5 have no Go port planned
-(Rust-build/test-tooling with no runtime equivalent needed), 47 not started.
+**Summary**: 7 ported/superseded, 17 partially ported, 5 have no Go port planned
+(Rust-build/test-tooling with no runtime equivalent needed), 46 not started.
 
-### ✅ Ported or superseded (6)
+### ✅ Ported or superseded (7)
 
 A "superseded" entry means the Rust crate's *purpose* is covered by a
 deliberate different-library choice in Go, not a missing gap — e.g. Bubble Tea
@@ -249,6 +249,7 @@ task.
 
 | Crate | Go equivalent | Note |
 |---|---|---|
+| `xai-circuit-breaker` | `internal/adapters/driven/llm/resilience.CircuitBreaker`/`.Provider` | Ported — CLOSED/OPEN/HALF_OPEN with lazy recovery on read, same approach as OmniRoute's provider breaker. Config-driven per-provider thresholds not wired yet (fixed default, always on) — see Phase 2 |
 | `xai-grok-http` | `internal/adapters/driven/llm/providers/{openai,anthropic}` | Superseded, not ported: Go uses the official `openai-go`/`anthropic-sdk-go` SDKs exclusively — no hand-rolled HTTP/reqwest client exists anywhere in this tree (a repeated hard rule this port follows; see "Library & framework choices" above) |
 | `xai-grok-models` | `internal/domain/settings.ModelInfo`/`APIBackend`/`ProviderConfig.Models` | Ported — the `xai` provider's `grok-build` catalog entry is copied verbatim from `default_models.json`, not fabricated |
 | `xai-grok-sampling-types` | `internal/domain/settings.ModelInfo`/`APIBackend` | Ported — `APIBackend` mirrors `ApiBackend` (chat_completions/responses/messages) field-for-field |
@@ -281,15 +282,12 @@ Real Go code exists and does part of the job; a meaningful gap remains
 | `xai-tool-runtime` | `internal/domain/ports.Tool`, `chatservice.executeToolsConcurrently` | No formal error taxonomy, no search index, no dispatch trait hierarchy |
 | `xai-tool-types` | `internal/domain/chat.ToolCall`/`ToolResult`, `internal/domain/ports.ToolSpec` | Narrower type set |
 
-### ⬜ Not started (47)
+### ⬜ Not started (46)
 
 Grouped by the ROADMAP phase (below) that owns them, where one exists. Crates
 with no assigned phase yet are flagged — they're real gaps in *this document*,
 not just in the Go tree, and should get a phase (or an explicit "won't port"
 decision) rather than sit here indefinitely.
-
-**Phase 2 — Concurrency & performance hardening**
-- `xai-circuit-breaker` — shared HTTP circuit breaker (`internal/adapters/driven/llm/resilience`, already on Phase 2's list)
 
 **Phase 3 — Tool ecosystem parity**
 - `xai-grok-tools-api` — protobuf `GrokToolsService`; Go's `ports.Tool` is in-process only, not gRPC
@@ -391,7 +389,7 @@ SDK choice per provider: see "Library & framework choices" → "LLM provider SDK
 - [x] Docs: `ARCHITECTURE.md`'s provider table and `README.md`'s "Running it against a different provider" section rewritten to match; this ROADMAP's Phase 1 checklist gets checked off item by item as PRs land.
 
 ### Phase 2 — Concurrency & performance hardening
-- [ ] `internal/adapters/driven/llm/resilience`: circuit breaker wrapping any `ports.LLMProvider` (CLOSED/OPEN/HALF_OPEN, config-driven threshold + reset timeout, lazy recovery on read — no background timer goroutine needed, matching the lazy-recovery pattern OmniRoute uses).
+- [x] `internal/adapters/driven/llm/resilience`: `CircuitBreaker` (CLOSED/OPEN/HALF_OPEN) + a `Provider` decorator wrapping any `ports.LLMProvider` — lazy recovery on read (`Status()`/`Allow()` transition OPEN→HALF_OPEN themselves when the reset timeout has elapsed, no background timer goroutine), matching the lazy-recovery pattern OmniRoute's provider breaker uses. Observes the full event stream, not just the synchronous return, since a mid-stream `EventError` is a real failure the openai/anthropic adapters' priming pattern doesn't always turn into a synchronous error. Always on in `cmd/grok/main.go` (threshold 5 / 30s reset, OmniRoute's API-key-provider tier as a starting default) — transparent while CLOSED, so this changes nothing observable for a healthy provider. Per-provider/config-driven thresholds are a later refinement, not blocking this landing. 12 tests, deterministic (`NewWithClock` injects the clock — no real `time.Sleep` in the breaker's own tests), `-race` clean across 10 repeated runs.
 - [x] Concurrent tool-call execution in `chatservice.run`: replaced the sequential `for _, call := range calls` loop with `errgroup.WithContext` bounded by `WithMaxConcurrentTools` (default 4), preserving deterministic ordering of tool-result messages (each goroutine writes its own pre-sized slice index, so results land in call order regardless of completion order). Pulled forward from Phase 2 ahead of the rest of that phase — tests cover the parallelism speedup, order preservation despite completion order, and the concurrency cap, all `-race` clean.
 - [ ] `internal/application/sessionmanager`: registry of concurrent sessions (`sync.Map` or mutex-guarded map), needed before any multi-session/headless mode.
 - [ ] Streaming backpressure policy documented and enforced on every SSE consumer (bounded channel, explicit slow-consumer behavior).
