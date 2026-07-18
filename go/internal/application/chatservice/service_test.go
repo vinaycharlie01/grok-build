@@ -11,41 +11,45 @@ import (
 	"github.com/vinaycharlie01/grok-build/go/internal/application/chatservice"
 	"github.com/vinaycharlie01/grok-build/go/internal/domain/chat"
 	"github.com/vinaycharlie01/grok-build/go/internal/domain/ports"
+	"github.com/vinaycharlie01/grok-build/go/internal/domain/ports/portsfakes"
 )
 
-// scriptedLLM is a fake ports.LLMProvider: each call to StreamChat pulls
-// the next canned event slice from script, indexed by call count.
-type scriptedLLM struct {
-	mu     sync.Mutex
-	calls  int
-	script func(call int) []ports.StreamEvent
+// newScriptedLLM builds a portsfakes.FakeLLMProvider (counterfeiter-
+// generated from ports.LLMProvider — see ports/llm.go's //go:generate
+// directive) whose StreamChat replays script(call), call-indexed (0 for
+// the first call, 1 for the second, ...): the same call-indexed
+// scripting this package's tests need for a multi-hop tool-call loop,
+// expressed through the generated fake's StreamChatCalls stub instead of
+// a hand-rolled type. FakeLLMProvider already tracks its own call count
+// (StreamChatCallCount(), incremented before the stub runs), so no
+// separate counter/mutex is needed here the way the old hand-rolled
+// scriptedLLM required.
+func newScriptedLLM(script func(call int) []ports.StreamEvent) *portsfakes.FakeLLMProvider {
+	llm := &portsfakes.FakeLLMProvider{}
+	llm.StreamChatCalls(func(context.Context, *chat.Session, []ports.ToolSpec) (<-chan ports.StreamEvent, error) {
+		events := script(llm.StreamChatCallCount() - 1)
+		ch := make(chan ports.StreamEvent, len(events))
+		for _, e := range events {
+			ch <- e
+		}
+		close(ch)
+		return ch, nil
+	})
+	return llm
 }
 
-func (f *scriptedLLM) StreamChat(_ context.Context, _ *chat.Session, _ []ports.ToolSpec) (<-chan ports.StreamEvent, error) {
-	f.mu.Lock()
-	call := f.calls
-	f.calls++
-	f.mu.Unlock()
-
-	events := f.script(call)
-	ch := make(chan ports.StreamEvent, len(events))
-	for _, e := range events {
-		ch <- e
-	}
-	close(ch)
-	return ch, nil
-}
-
-type fakeTool struct {
-	name string
-	fn   func(argsJSON string) (string, error)
-}
-
-func (t *fakeTool) Name() string        { return t.name }
-func (t *fakeTool) Description() string { return "fake tool for tests" }
-func (t *fakeTool) JSONSchema() string  { return `{"type":"object"}` }
-func (t *fakeTool) Execute(_ context.Context, argsJSON string) (string, error) {
-	return t.fn(argsJSON)
+// newFakeTool builds a portsfakes.FakeTool named name whose Execute calls
+// fn with the arguments JSON — the generated-fake equivalent of the old
+// hand-rolled fakeTool{name, fn}.
+func newFakeTool(name string, fn func(argsJSON string) (string, error)) *portsfakes.FakeTool {
+	tool := &portsfakes.FakeTool{}
+	tool.NameReturns(name)
+	tool.DescriptionReturns("fake tool for tests")
+	tool.JSONSchemaReturns(`{"type":"object"}`)
+	tool.ExecuteCalls(func(_ context.Context, argsJSON string) (string, error) {
+		return fn(argsJSON)
+	})
+	return tool
 }
 
 func drain(ch <-chan ports.StreamEvent) []ports.StreamEvent {
@@ -57,12 +61,12 @@ func drain(ch <-chan ports.StreamEvent) []ports.StreamEvent {
 }
 
 func TestSendTextOnlyReply(t *testing.T) {
-	llm := &scriptedLLM{script: func(call int) []ports.StreamEvent {
+	llm := newScriptedLLM(func(call int) []ports.StreamEvent {
 		return []ports.StreamEvent{
 			{Type: ports.EventTextDelta, Text: "Hello, "},
 			{Type: ports.EventTextDelta, Text: "world!"},
 		}
-	}}
+	})
 
 	svc := chatservice.New(llm, nil)
 	session := chat.NewSession("s1", "grok-4", "")
@@ -89,7 +93,7 @@ func TestSendTextOnlyReply(t *testing.T) {
 }
 
 func TestSendExecutesToolThenContinues(t *testing.T) {
-	llm := &scriptedLLM{script: func(call int) []ports.StreamEvent {
+	llm := newScriptedLLM(func(call int) []ports.StreamEvent {
 		switch call {
 		case 0:
 			return []ports.StreamEvent{
@@ -98,13 +102,13 @@ func TestSendExecutesToolThenContinues(t *testing.T) {
 		default:
 			return []ports.StreamEvent{{Type: ports.EventTextDelta, Text: "done"}}
 		}
-	}}
+	})
 
 	var gotArgs string
-	tool := &fakeTool{name: "echo", fn: func(argsJSON string) (string, error) {
+	tool := newFakeTool("echo", func(argsJSON string) (string, error) {
 		gotArgs = argsJSON
 		return "echoed: hi", nil
-	}}
+	})
 
 	svc := chatservice.New(llm, []ports.Tool{tool})
 	session := chat.NewSession("s1", "grok-4", "")
@@ -141,14 +145,14 @@ func TestSendExecutesToolThenContinues(t *testing.T) {
 }
 
 func TestSendUnknownToolReportsErrorContentAndContinues(t *testing.T) {
-	llm := &scriptedLLM{script: func(call int) []ports.StreamEvent {
+	llm := newScriptedLLM(func(call int) []ports.StreamEvent {
 		if call == 0 {
 			return []ports.StreamEvent{
 				{Type: ports.EventToolCall, ToolCall: chat.ToolCall{ID: "1", Name: "missing", Arguments: `{}`}},
 			}
 		}
 		return []ports.StreamEvent{{Type: ports.EventTextDelta, Text: "ok"}}
-	}}
+	})
 
 	svc := chatservice.New(llm, nil) // no tools registered
 	session := chat.NewSession("s1", "grok-4", "")
@@ -162,13 +166,13 @@ func TestSendUnknownToolReportsErrorContentAndContinues(t *testing.T) {
 }
 
 func TestSendExceedsMaxToolHops(t *testing.T) {
-	llm := &scriptedLLM{script: func(call int) []ports.StreamEvent {
+	llm := newScriptedLLM(func(call int) []ports.StreamEvent {
 		// Always request another tool call; the model never finishes.
 		return []ports.StreamEvent{
 			{Type: ports.EventToolCall, ToolCall: chat.ToolCall{ID: "1", Name: "loop", Arguments: `{}`}},
 		}
-	}}
-	tool := &fakeTool{name: "loop", fn: func(string) (string, error) { return "again", nil }}
+	})
+	tool := newFakeTool("loop", func(string) (string, error) { return "again", nil })
 
 	svc := chatservice.New(llm, []ports.Tool{tool}, chatservice.WithMaxToolHops(2))
 	session := chat.NewSession("s1", "grok-4", "")
@@ -183,10 +187,10 @@ func TestSendExceedsMaxToolHops(t *testing.T) {
 
 func TestSendStopsOnContextCancellation(t *testing.T) {
 	block := make(chan struct{})
-	llm := &scriptedLLM{script: func(call int) []ports.StreamEvent {
+	llm := newScriptedLLM(func(call int) []ports.StreamEvent {
 		<-block // never returns until the test unblocks it
 		return nil
-	}}
+	})
 
 	svc := chatservice.New(llm, nil)
 	session := chat.NewSession("s1", "grok-4", "")
@@ -204,7 +208,7 @@ func TestSendStopsOnContextCancellation(t *testing.T) {
 func TestSendExecutesToolCallsConcurrently(t *testing.T) {
 	const delay = 50 * time.Millisecond
 
-	llm := &scriptedLLM{script: func(call int) []ports.StreamEvent {
+	llm := newScriptedLLM(func(call int) []ports.StreamEvent {
 		if call == 0 {
 			return []ports.StreamEvent{
 				{Type: ports.EventToolCall, ToolCall: chat.ToolCall{ID: "1", Name: "a", Arguments: "{}"}},
@@ -212,13 +216,13 @@ func TestSendExecutesToolCallsConcurrently(t *testing.T) {
 			}
 		}
 		return []ports.StreamEvent{{Type: ports.EventTextDelta, Text: "done"}}
-	}}
+	})
 
-	sleepTool := func(name string) *fakeTool {
-		return &fakeTool{name: name, fn: func(string) (string, error) {
+	sleepTool := func(name string) *portsfakes.FakeTool {
+		return newFakeTool(name, func(string) (string, error) {
 			time.Sleep(delay)
 			return name + " done", nil
-		}}
+		})
 	}
 
 	svc := chatservice.New(llm, []ports.Tool{sleepTool("a"), sleepTool("b")})
@@ -237,7 +241,7 @@ func TestSendExecutesToolCallsConcurrently(t *testing.T) {
 }
 
 func TestSendPreservesToolResultOrderDespiteCompletionOrder(t *testing.T) {
-	llm := &scriptedLLM{script: func(call int) []ports.StreamEvent {
+	llm := newScriptedLLM(func(call int) []ports.StreamEvent {
 		if call == 0 {
 			return []ports.StreamEvent{
 				{Type: ports.EventToolCall, ToolCall: chat.ToolCall{ID: "1", Name: "slow", Arguments: "{}"}},
@@ -245,15 +249,15 @@ func TestSendPreservesToolResultOrderDespiteCompletionOrder(t *testing.T) {
 			}
 		}
 		return []ports.StreamEvent{{Type: ports.EventTextDelta, Text: "done"}}
-	}}
+	})
 
-	slow := &fakeTool{name: "slow", fn: func(string) (string, error) {
+	slow := newFakeTool("slow", func(string) (string, error) {
 		time.Sleep(40 * time.Millisecond)
 		return "slow result", nil
-	}}
-	fast := &fakeTool{name: "fast", fn: func(string) (string, error) {
+	})
+	fast := newFakeTool("fast", func(string) (string, error) {
 		return "fast result", nil
-	}}
+	})
 
 	svc := chatservice.New(llm, []ports.Tool{slow, fast})
 	session := chat.NewSession("s1", "grok-4", "")
@@ -299,15 +303,15 @@ func TestWithMaxConcurrentToolsLimitsParallelism(t *testing.T) {
 	for i := 0; i < numCalls; i++ {
 		name := fmt.Sprintf("tool%d", i)
 		calls[i] = ports.StreamEvent{Type: ports.EventToolCall, ToolCall: chat.ToolCall{ID: fmt.Sprintf("%d", i), Name: name, Arguments: "{}"}}
-		tools[i] = &fakeTool{name: name, fn: track}
+		tools[i] = newFakeTool(name, track)
 	}
 
-	llm := &scriptedLLM{script: func(call int) []ports.StreamEvent {
+	llm := newScriptedLLM(func(call int) []ports.StreamEvent {
 		if call == 0 {
 			return calls
 		}
 		return []ports.StreamEvent{{Type: ports.EventTextDelta, Text: "done"}}
-	}}
+	})
 
 	svc := chatservice.New(llm, tools, chatservice.WithMaxConcurrentTools(limit))
 	session := chat.NewSession("s1", "grok-4", "")

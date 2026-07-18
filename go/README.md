@@ -104,6 +104,17 @@ reason, then write the minimum code to turn it green. See "Definition of
 done" in [`docs/ROADMAP.md`](docs/ROADMAP.md) — this is a hard requirement
 for every task in the roadmap, not a suggestion.
 
+Every test package also runs [`go.uber.org/goleak`](https://github.com/uber-go/goleak)
+(`TestMain` in that package's `main_test.go`), failing the run if any test
+leaves a goroutine running after it finishes — automated, not just
+manually reviewed. This isn't theoretical: adding it caught 3 real leaks
+(a test-only `context.Background()` that should have been cancellable,
+two tests that discarded a `StreamChat` event channel instead of draining
+it) — see ROADMAP.md's Phase 2 checklist for the specifics. When adding a
+new test package, copy an existing `main_test.go` (they're all identical:
+`func TestMain(m *testing.M) { goleak.VerifyTestMain(m) }` in that
+package's test-file package name) rather than skipping it.
+
 ### Mocking port interfaces (counterfeiter)
 
 Every interface in `internal/domain/ports` (`LLMProvider`, `Tool`,
@@ -126,15 +137,18 @@ real network, filesystem, or database — `portsfakes.FakeLLMProvider`,
 `.FakeTool`, `.FakeSessionStore`, etc. Each supports the usual counterfeiter
 API: `.StreamChatReturns(ch, err)` for a fixed return, `.ExecuteCalls(fn)`
 for dynamic behavior, `.SaveCallCount()`/`.SaveArgsForCall(i)` to assert on
-what was called and with what. `internal/adapters/driving/tui/model_test.go`
-and `cmd/grok/integration_test.go` are the two worked examples in this tree.
-
-Not every test needs one: `internal/application/chatservice/service_test.go`
-keeps its own small hand-rolled `scriptedLLM`/`fakeTool` because it needs
-call-indexed scripted responses across a multi-hop tool-call loop, which is
-more naturally expressed as a plain Go closure than through counterfeiter's
-per-call stubbing API — use whichever is less ceremony for the test at hand,
-not counterfeiter unconditionally everywhere.
+what was called and with what, `.StreamChatCallCount()` for call-indexed
+scripting (the fake tracks its own call count before the stub runs, so a
+test can branch on "which call is this" without a hand-rolled counter/mutex
+— see `internal/application/chatservice/service_test.go`'s `newScriptedLLM`
+helper, built for exactly that: a multi-hop tool-call loop where each hop
+needs a different scripted response). No hand-rolled port fake remains
+anywhere in this tree — every test that needs one uses a generated fake,
+possibly wrapped in a small same-package constructor helper
+(`newScriptedLLM`, `newFakeTool`) when a test file wants a shorter call
+site than the raw counterfeiter API. `internal/adapters/driving/tui/model_test.go`,
+`internal/application/chatservice/service_test.go`, and
+`cmd/grok/integration_test.go` are the worked examples in this tree.
 
 ## Running it
 

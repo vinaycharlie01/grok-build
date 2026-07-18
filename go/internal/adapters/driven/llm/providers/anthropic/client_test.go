@@ -168,8 +168,16 @@ func TestStreamChatSendsSystemPromptSeparatelyAndToolResultsAsUserMessages(t *te
 		JSONSchema:  `{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}`,
 	}}
 
-	if _, err := client.StreamChat(context.Background(), session, tools); err != nil {
+	events, err := client.StreamChat(context.Background(), session, tools)
+	if err != nil {
 		t.Fatalf("StreamChat() error = %v", err)
+	}
+	for range events {
+		// This test only cares about the request body the server
+		// received; still must drain the channel so consumeStream's
+		// goroutine can send its final event and exit instead of
+		// blocking on it forever (goleak's TestMain in main_test.go
+		// caught this leak when this loop was missing).
 	}
 
 	var req struct {

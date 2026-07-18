@@ -237,10 +237,10 @@ piece — when a phase task references a Rust crate, this table is where that
 mapping is decided and kept current. Update it in the same PR that ports (or
 supersedes, or explicitly decides not to port) a crate.
 
-**Summary**: 6 ported/superseded, 17 partially ported, 5 have no Go port planned
-(Rust-build/test-tooling with no runtime equivalent needed), 47 not started.
+**Summary**: 7 ported/superseded, 17 partially ported, 5 have no Go port planned
+(Rust-build/test-tooling with no runtime equivalent needed), 46 not started.
 
-### ✅ Ported or superseded (6)
+### ✅ Ported or superseded (7)
 
 A "superseded" entry means the Rust crate's *purpose* is covered by a
 deliberate different-library choice in Go, not a missing gap — e.g. Bubble Tea
@@ -249,6 +249,7 @@ task.
 
 | Crate | Go equivalent | Note |
 |---|---|---|
+| `xai-circuit-breaker` | `internal/adapters/driven/llm/resilience.Provider` (`github.com/sony/gobreaker/v2`) | Ported — CLOSED/OPEN/HALF_OPEN via the well-established gobreaker library (not hand-rolled — an earlier version of this package did hand-roll the state machine; replaced), same lazy-recovery approach as OmniRoute's provider breaker. Config-driven per-provider thresholds not wired yet (fixed default, always on) — see Phase 2 |
 | `xai-grok-http` | `internal/adapters/driven/llm/providers/{openai,anthropic}` | Superseded, not ported: Go uses the official `openai-go`/`anthropic-sdk-go` SDKs exclusively — no hand-rolled HTTP/reqwest client exists anywhere in this tree (a repeated hard rule this port follows; see "Library & framework choices" above) |
 | `xai-grok-models` | `internal/domain/settings.ModelInfo`/`APIBackend`/`ProviderConfig.Models` | Ported — the `xai` provider's `grok-build` catalog entry is copied verbatim from `default_models.json`, not fabricated |
 | `xai-grok-sampling-types` | `internal/domain/settings.ModelInfo`/`APIBackend` | Ported — `APIBackend` mirrors `ApiBackend` (chat_completions/responses/messages) field-for-field |
@@ -275,21 +276,18 @@ Real Go code exists and does part of the job; a meaningful gap remains
 | `xai-grok-paths` | `internal/adapters/driven/config/file.DefaultPath()` | One path (the config file), not a general typed-path library |
 | `xai-grok-sampler` | `internal/adapters/driven/llm/providers/{openai,anthropic}` | SDK-backed streaming exists; no retry-with-backoff, no actor concurrency model |
 | `xai-grok-shell` | `cmd/grok` | Covers a sliver: no managed_config, no mcp_doctor, no active_sessions crash tracking, no leader/relay/remote modes |
-| `xai-grok-test-support` | Go's own `httptest.Server`-based SDK test transports, `internal/domain/ports/portsfakes` (counterfeiter-generated mocks), a small hand-rolled `scriptedLLM`/`fakeTool` in `chatservice` where call-indexed scripting suits a closure better than counterfeiter's stubbing API | Equivalent purpose, not a literal port — no ACP stdio test client, no headless runner |
+| `xai-grok-test-support` | Go's own `httptest.Server`-based SDK test transports, `internal/domain/ports/portsfakes` (counterfeiter-generated mocks, used everywhere a port needs a fake — no hand-rolled port fake remains anywhere in this tree) | Equivalent purpose, not a literal port — no ACP stdio test client, no headless runner |
 | `xai-grok-tools` | `internal/adapters/driven/tools/{shellexec,readfile,writefile,search}` | 4 of many tools; no `editfile`, no `git` tool, no tool registry (Phase 3) |
 | `xai-grok-workspace` | `cmd/grok/main.go`'s `os.Getwd()`-based `workspaceRoot` | No VCS/discovery/remote-execution surface, just a root path |
 | `xai-tool-runtime` | `internal/domain/ports.Tool`, `chatservice.executeToolsConcurrently` | No formal error taxonomy, no search index, no dispatch trait hierarchy |
 | `xai-tool-types` | `internal/domain/chat.ToolCall`/`ToolResult`, `internal/domain/ports.ToolSpec` | Narrower type set |
 
-### ⬜ Not started (47)
+### ⬜ Not started (46)
 
 Grouped by the ROADMAP phase (below) that owns them, where one exists. Crates
 with no assigned phase yet are flagged — they're real gaps in *this document*,
 not just in the Go tree, and should get a phase (or an explicit "won't port"
 decision) rather than sit here indefinitely.
-
-**Phase 2 — Concurrency & performance hardening**
-- `xai-circuit-breaker` — shared HTTP circuit breaker (`internal/adapters/driven/llm/resilience`, already on Phase 2's list)
 
 **Phase 3 — Tool ecosystem parity**
 - `xai-grok-tools-api` — protobuf `GrokToolsService`; Go's `ports.Tool` is in-process only, not gRPC
@@ -391,11 +389,15 @@ SDK choice per provider: see "Library & framework choices" → "LLM provider SDK
 - [x] Docs: `ARCHITECTURE.md`'s provider table and `README.md`'s "Running it against a different provider" section rewritten to match; this ROADMAP's Phase 1 checklist gets checked off item by item as PRs land.
 
 ### Phase 2 — Concurrency & performance hardening
-- [ ] `internal/adapters/driven/llm/resilience`: circuit breaker wrapping any `ports.LLMProvider` (CLOSED/OPEN/HALF_OPEN, config-driven threshold + reset timeout, lazy recovery on read — no background timer goroutine needed, matching the lazy-recovery pattern OmniRoute uses).
+- [x] `internal/adapters/driven/llm/resilience`: a `Provider` decorator wrapping any `ports.LLMProvider` in a circuit breaker backed by [`github.com/sony/gobreaker/v2`](https://github.com/sony/gobreaker) — CLOSED/OPEN/HALF_OPEN via `TwoStepCircuitBreaker` (`Allow()` + a `done(err)` callback reported once the outcome is known, not the simpler `Execute(func() (T, error))` form, since a streaming call's real outcome isn't known until the stream finishes, not when `StreamChat` synchronously returns), same lazy-recovery approach as OmniRoute's provider breaker (state re-evaluated on read, no background timer goroutine — gobreaker's own design, not something this wrapper adds). Observes the full event stream, not just the synchronous return, since a mid-stream `EventError` is a real failure the openai/anthropic adapters' priming pattern doesn't always turn into a synchronous error; a cancelled/deadline-exceeded context is excluded (`IsExcluded`) rather than counted as a failure, since that's the caller giving up, not the provider misbehaving — excluding it (vs. simply never calling `done`) still frees gobreaker's one-shot HALF_OPEN probe slot via its own accounting. Always on in `cmd/grok/main.go` (threshold 5 / 30s reset, OmniRoute's API-key-provider tier as a starting default) — transparent while CLOSED, so this changes nothing observable for a healthy provider. Per-provider/config-driven thresholds are a later refinement, not blocking this landing.
+  - An earlier version of this package hand-rolled the CLOSED/OPEN/HALF_OPEN state machine instead of using gobreaker; replaced on request (avoid reinventing something with an established Go library, same rule already applied to the LLM SDKs and to counterfeiter for mocking). The hand-rolled version supported an injectable clock for fully deterministic tests; gobreaker has no such public hook, so the 3 tests exercising the OPEN→HALF_OPEN transition use a real, short `Timeout` (20ms) plus a real `time.Sleep` well past it (6x margin) instead — the honest way to test the real library's actual behavior, verified `-race` clean across 10 repeated runs with no observed flakiness.
 - [x] Concurrent tool-call execution in `chatservice.run`: replaced the sequential `for _, call := range calls` loop with `errgroup.WithContext` bounded by `WithMaxConcurrentTools` (default 4), preserving deterministic ordering of tool-result messages (each goroutine writes its own pre-sized slice index, so results land in call order regardless of completion order). Pulled forward from Phase 2 ahead of the rest of that phase — tests cover the parallelism speedup, order preservation despite completion order, and the concurrency cap, all `-race` clean.
 - [ ] `internal/application/sessionmanager`: registry of concurrent sessions (`sync.Map` or mutex-guarded map), needed before any multi-session/headless mode.
 - [ ] Streaming backpressure policy documented and enforced on every SSE consumer (bounded channel, explicit slow-consumer behavior).
-- [ ] Add `go.uber.org/goleak` (or equivalent) to every adapter test package's `TestMain`, catching goroutine leaks automatically instead of relying on manual review.
+- [x] `go.uber.org/goleak`'s `VerifyTestMain` added to all 14 test packages in this tree (a `main_test.go` per package — `package main` for `cmd/grok`, matching each package's existing test-file package name elsewhere), catching goroutine leaks automatically instead of relying on manual review. This immediately found 3 real leaks, not hypothetical ones:
+  - `internal/adapters/driving/tui`'s `newTestModel` used `context.Background()`; several tests call `submit()`/trigger `chatservice.Send` without draining its event channel to completion (they test `handleStreamEvent`/`Update` directly instead of running the full Bubble Tea loop). `chatservice`'s producer goroutine already selects on `ctx.Done()` for exactly this situation (see its "goroutine-leak-safe streaming pattern" doc comment) — but only if the context passed to `New()` is ever actually cancelled. Fixed by switching to a cancellable context with `t.Cleanup(cancel)`.
+  - `internal/adapters/driven/llm/providers/{openai,anthropic}` each had one test (`TestStreamChatSendsToolsAndFullConversationHistory` / `TestStreamChatSendsSystemPromptSeparatelyAndToolResultsAsUserMessages`) that called `StreamChat` and checked only the returned error, discarding the event channel entirely — leaving `consumeStream`'s goroutine blocked forever trying to send its first event to nobody. Fixed by draining the channel (a `for range events {}` loop; these tests only assert on the outgoing request body, not the events).
+  - All three were test-only bugs, not production bugs: real usage always eventually drains (the TUI's real event loop) or gets a cancelled context (Ctrl-C/SIGTERM via `signal.NotifyContext` in `cmd/grok/main.go`) — but "always eventually" and "gets cancelled in real usage" were assumptions until goleak made them verified. Full suite `-race` clean across 5 repeated runs after the fixes.
 - [ ] Benchmarks: `BenchmarkChatServiceConcurrentToolCalls`, `BenchmarkSSEParse`; wire `mage go:bench` (new `bench` section in `go.yaml`, new `Go.Bench` target in `magefile.go`, same pattern as existing targets).
 - [ ] pprof HTTP endpoint behind a `debug` build tag or `GROK_DEBUG=1` env check (loopback-only, never exposed by default).
 
@@ -481,14 +483,13 @@ A task is done only when it:
 
 1. Builds via `mage go:build` and passes `mage go:test` / `mage go:race`.
 2. Was developed TDD: the test(s) at the appropriate layer (counterfeiter-
-   generated fakes from `internal/domain/ports/portsfakes` for a port
-   dependency, `httptest`/`t.TempDir()` for adapters, a small hand-rolled
-   fake only when call-indexed/dynamic scripting makes that genuinely
-   simpler than counterfeiter's stubbing API — see README.md's "Mocking
-   port interfaces") were written first, confirmed to fail for the right
-   reason, then made to pass — not written afterward to describe code
-   that already works. Commit history / PR description should make the
-   red→green step visible (e.g. a commit that adds only the failing
+   generated fakes from `internal/domain/ports/portsfakes` for any port
+   dependency — no hand-rolled port fake, ever; `httptest`/`t.TempDir()`
+   for adapters — see README.md's "Mocking port interfaces") were
+   written first, confirmed to fail for the right reason, then made to
+   pass — not written afterward to describe code that already works.
+   Commit history / PR description should make the red→green step visible
+   (e.g. a commit that adds only the failing
    test, or the PR notes the failure output before the fix).
 3. Has no goroutine that can outlive its context — verified, not assumed.
 4. Updates `ARCHITECTURE.md`'s provider/tool table if it adds a new

@@ -10,9 +10,11 @@ require (
 	github.com/magefile/mage v1.17.2
 	github.com/nirantaraai/nava v0.0.0-20260627175157-a13fb04023e4
 	github.com/openai/openai-go v1.12.0
+	github.com/sony/gobreaker/v2 v2.4.0
 	github.com/spf13/cobra v1.10.2
 	github.com/testcontainers/testcontainers-go/modules/mongodb v0.43.0
 	go.mongodb.org/mongo-driver/v2 v2.8.0
+	go.uber.org/goleak v1.3.0
 	golang.org/x/sync v0.22.0
 	gopkg.in/yaml.v3 v3.0.1
 )
