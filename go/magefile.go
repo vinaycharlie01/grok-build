@@ -35,6 +35,11 @@ func (Go) Test() error { return gomagex.Test() }
 // Race runs the test suite with the race detector enabled.
 func (Go) Race() error { return gomagex.Race() }
 
+// Integration runs the integration test suite (tests/integration/ —
+// today: MongoDB via testcontainers-go). Requires a reachable Docker
+// daemon; not part of Test/Race/Vet/Build above.
+func (Go) Integration() error { return gomagex.Integration() }
+
 // Coverage runs tests with coverage profiling.
 func (Go) Coverage() error { return gomagex.Coverage() }
 

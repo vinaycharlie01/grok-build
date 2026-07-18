@@ -18,13 +18,23 @@ import (
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/credentials/env"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/llm/providers/anthropic"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/llm/providers/openai"
+	sessionmongo "github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/sessionstore/mongo"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/tools/readfile"
+	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/tools/search"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/tools/shellexec"
+	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driven/tools/writefile"
 	"github.com/vinaycharlie01/grok-build/go/internal/adapters/driving/tui"
 	"github.com/vinaycharlie01/grok-build/go/internal/application/chatservice"
-	"github.com/vinaycharlie01/grok-build/go/internal/domain/chat"
 	"github.com/vinaycharlie01/grok-build/go/internal/domain/ports"
 )
+
+// localSessionID is the fixed session identity used for the single
+// interactive session cmd/grok drives today (no multi-session support
+// yet — see ROADMAP.md's Phase 2 sessionmanager task). It's also the key
+// a configured SessionStore loads/saves under, so an operator who enables
+// sessionStore: in their config file resumes the same conversation across
+// restarts rather than starting fresh each time.
+const localSessionID = "local"
 
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
@@ -36,8 +46,8 @@ func main() {
 // runInteractive wires every adapter together and launches the TUI. It's
 // the composition root's actual entrypoint; cli.go's RunE funcs (bare
 // `grok` and `grok run`) both call it directly, passing the --provider
-// flag value through.
-func runInteractive(providerFlag string) error {
+// and --model flag values through.
+func runInteractive(providerFlag, modelFlag string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -56,6 +66,7 @@ func runInteractive(providerFlag string) error {
 	if err != nil {
 		return fmt.Errorf("resolve provider: %w", err)
 	}
+	chosen.Model = resolveModelID(modelFlag, os.Getenv, chosen.Model)
 
 	var creds ports.CredentialStore
 	if chosen.APIKeyEnvVar == "" {
@@ -87,10 +98,50 @@ func runInteractive(providerFlag string) error {
 	tools := []ports.Tool{
 		shellexec.New(),
 		readfile.New(workspaceRoot),
+		writefile.New(workspaceRoot),
+		search.New(workspaceRoot),
 	}
 
 	svc := chatservice.New(llmClient, tools)
-	session := chat.NewSession("local", chosen.Model, cfg.SystemPrompt)
 
-	return tui.Run(ctx, svc, session)
+	// SessionStore is opt-in (see settings.Config.SessionStore's doc
+	// comment): with no sessionStore: configured, store stays nil and
+	// resolveSession/the deferred Save below behave exactly as before
+	// this feature existed — a fresh in-memory session every run.
+	var store ports.SessionStore
+	if cfg.SessionStore != nil {
+		switch cfg.SessionStore.Kind {
+		case "mongo":
+			mongoStore, err := sessionmongo.New(ctx, cfg.SessionStore.URI, cfg.SessionStore.Database, cfg.SessionStore.Collection)
+			if err != nil {
+				return fmt.Errorf("connect session store: %w", err)
+			}
+			defer mongoStore.Close(context.Background())
+			store = mongoStore
+		default:
+			return fmt.Errorf("sessionStore.kind %q is not supported (want \"mongo\")", cfg.SessionStore.Kind)
+		}
+	}
+
+	session, err := resolveSession(ctx, store, localSessionID, chosen.Model, cfg.SystemPrompt)
+	if err != nil {
+		return fmt.Errorf("resolve session: %w", err)
+	}
+
+	runErr := tui.Run(ctx, svc, session)
+
+	if store != nil {
+		// Save on a fresh context, not ctx: ctx is cancelled by the same
+		// Ctrl-C/SIGTERM that ends tui.Run, and a cancelled context would
+		// abort the save of exactly the session state we most want to
+		// keep (whatever happened right up to the interrupt).
+		if saveErr := store.Save(context.Background(), session); saveErr != nil {
+			if runErr != nil {
+				return fmt.Errorf("%w (additionally, save session: %v)", runErr, saveErr)
+			}
+			return fmt.Errorf("save session: %w", saveErr)
+		}
+	}
+
+	return runErr
 }

@@ -263,7 +263,57 @@ one SDK-backed `providers/openai.Client`. `kind: anthropic` uses
 OpenAI one. There is no hand-rolled HTTP client for any provider; see
 ROADMAP.md's "Library & framework choices" for why.
 
-Then pick one:
+#### Selecting a model, and an optional per-provider model catalog
+
+`model:` on a provider entry is its default model id and needs nothing
+else — that's the whole story for most entries above. On top of it, a
+provider can optionally list a `models:` catalog giving each model id
+richer metadata (context window, sampling defaults, which API backend it
+expects, public availability) — the Go port of the Rust reference's
+`xai-grok-models` crate (`default_models.json`). `settings.Default()`'s
+`xai` entry ships one real example, ported verbatim from that file:
+
+```yaml
+  - name: xai
+    kind: openai
+    baseURL: https://api.x.ai/v1
+    model: grok-4
+    apiKeyEnvVar: XAI_API_KEY
+    models:
+      - id: grok-4
+        name: Grok 4
+        description: General-purpose flagship model
+        contextWindow: 256000
+        apiBackend: chat_completions
+        supportedInAPI: true
+
+      - id: grok-build
+        name: Grok Build
+        description: Best for advanced coding tasks
+        contextWindow: 500000
+        temperature: 0.7
+        topP: 0.95
+        apiBackend: responses
+        supportedInAPI: false
+```
+
+A `models:` catalog is entirely optional — a provider with none still
+works exactly as before, `ModelInfo(id)` just returns a minimal entry
+carrying only the id (see `internal/domain/settings/config.go`). Nothing
+consumes the metadata yet (it's forward-looking for Phase 4's
+context-window-aware auto-compact — see ROADMAP.md); today it's there to
+select and document models, not to change request behavior.
+
+Override which model id is actually requested with `--model` (falls back
+to `GROK_MODEL`, falls back to the selected provider's `model:`) — the
+exact same precedence shape as `--provider`/`GROK_PROVIDER`:
+
+```bash
+grok run --provider xai --model grok-build   # picks grok-build over xai's default (grok-4)
+GROK_MODEL=grok-4-fast grok run              # env var works the same as the flag
+```
+
+Then pick one provider:
 
 ```bash
 export XAI_API_KEY=sk-...
@@ -284,6 +334,60 @@ running to verify the *logic* is correct; you only need one running to
 actually talk to a model. An unconfigured `--provider` name fails fast
 with a clear error naming what you asked for, not a generic "no
 credentials" message three layers down.
+
+### Session persistence (opt-in, MongoDB)
+
+By default a session lives only in memory — closing `grok` loses it, the
+same behavior as every earlier version of this port. Add a `sessionStore:`
+section to your config file to persist it instead, backed by the official
+[`mongo-go-driver/v2`](https://github.com/mongodb/mongo-go-driver) (no
+hand-rolled wire protocol — same rule as every LLM provider in this tree):
+
+```yaml
+sessionStore:
+  kind: mongo
+  uri: mongodb://localhost:27017
+  database: grok
+  collection: sessions
+```
+
+With this configured, `grok run` loads the previous session (a fixed
+single-session id, `"local"` — see `cmd/grok/main.go`'s `localSessionID`;
+multi-session support is a separate, later Phase 2 task) on startup if one
+was saved, and saves the current session back on exit — including on
+Ctrl-C/SIGTERM, via a fresh (uncancelled) context so the interrupt that
+ends the TUI doesn't also abort the save of the very state you'd want kept.
+Omitting `sessionStore:` entirely (the default) skips all of this —
+`resolveSession` (`cmd/grok/session.go`) just builds a fresh in-memory
+session, exactly as before this existed.
+
+**Testing this yourself:**
+
+- The BSON document mapping (`internal/adapters/driven/sessionstore/mongo/document.go`)
+  is unit tested with no live server needed — `go test ./internal/adapters/driven/sessionstore/...`
+  — including a round-trip through the real `bson.Marshal`/`Unmarshal` the
+  driver uses internally, not just a Go-level struct copy.
+- `Save`/`Load`/`Delete` against a **real** `mongod` are covered by
+  `tests/integration/sessionstore_mongo_test.go`, using
+  [`testcontainers-go`](https://github.com/testcontainers/testcontainers-go)'s
+  MongoDB module to start a real container — no mocks. This suite is
+  excluded from `go test ./...`/`mage go:test` (it's gated behind the
+  `integration` build tag, so it can't slow down or break the default test
+  run for anyone without Docker available) — run it explicitly:
+
+  ```bash
+  mage go:integration   # needs a reachable Docker daemon; pulls mongo:7
+  ```
+
+  **Known gap, stated plainly**: this suite could not be executed in the
+  sandbox that wrote it — Docker itself ran, but pulling `mongo:7` from
+  Docker Hub was blocked by that environment's egress policy. The failure
+  was a clean `Error response from daemon: No such image: mongo:7` at
+  container-create time, not a code-path error, which at least confirms
+  the test harness and cleanup wiring work up to that point — but the
+  actual `Save`/`Load`/`Delete` calls against a live server have not been
+  observed to pass. **Run `mage go:integration` yourself wherever you have
+  real Docker registry access before trusting this in production.**
 
 ## Layout
 
@@ -309,14 +413,22 @@ go/
                                 package); anthropic is its own SDK-backed
                                 client (different wire format) —
                                 config/file, credentials/env,
-                                tools/{shellexec,readfile}
+                                tools/{shellexec,readfile,writefile,search},
+                                sessionstore/mongo (opt-in, see "Session
+                                persistence" below)
   internal/adapters/driving/   tui (Bubble Tea)
+  tests/integration/        tests needing a real external process (today:
+                             sessionstore_mongo_test.go via testcontainers-go)
+                             — excluded from `go test ./...`/`mage go:test`
+                             by the "integration" build tag; run with
+                             `mage go:integration` (needs Docker)
   magefile.go, go.yaml     the nava/Mage build definition
 ```
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how this maps onto
-the ~65-crate Rust closure under `../crates/codegen/` and what's ported so
-far vs. what's still Rust-only, and [`docs/ROADMAP.md`](docs/ROADMAP.md) for
-the phased plan (multi-provider support, concurrency/performance hardening,
+the 75-crate Rust closure under `../crates/` and what's ported so far vs.
+what's still Rust-only, and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the
+phased plan (multi-provider support, concurrency/performance hardening,
 tool parity, MCP/ACP, sandboxing, telemetry, distribution) that gets it
-there.
+there — including a full crate-by-crate port-status table for all 75
+crates ("Full Rust crate inventory").
